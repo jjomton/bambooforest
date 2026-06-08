@@ -1,0 +1,70 @@
+/* Google Fonts 가져오기 (Plus Jakarta Sans & Inter) */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
+
+@import "tailwindcss";
+
+@theme {
+  /* 브랜드 및 시스템 컬러 정의 (DESIGN.md 가이드 기반) */
+  --color-brand-blue: #2563eb;
+  --color-brand-blue-hover: #1d4ed8;
+  
+  --color-bamboo-surface: #ffffff;
+  --color-bamboo-bg: #f2f4f7; /* Toss-like soft gray */
+  --color-bamboo-text-main: #191b23; /* High contrast but soft */
+  --color-bamboo-text-muted: #434655;
+  --color-bamboo-border: #e1e2ed;
+  
+  /* 상태 컬러 */
+  --color-status-pending: #e7e7f3;
+  --color-status-pending-text: #434655;
+  --color-status-accepted: #d0e1fb;
+  --color-status-accepted-text: #0053db;
+  --color-status-rejected: #ffdad6;
+  --color-status-rejected-text: #ba1a1a;
+
+  /* 폰트 패밀리 */
+  --font-plus-jakarta: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-inter: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+
+  /* 코너 둥글기 (DESIGN.md 규칙: Cards/Large buttons -> 1.0rem, Inputs/Chips -> 0.5rem) */
+  --radius-bamboo-card: 1.0rem; /* 16px */
+  --radius-bamboo-input: 0.5rem; /* 8px */
+}
+
+/* Base style overrides */
+html, body, #root {
+  background-color: var(--color-bamboo-bg);
+  color: var(--color-bamboo-text-main);
+  font-family: var(--font-inter);
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-plus-jakarta);
+  letter-spacing: -0.01em;
+}
+
+/* Toss풍 Tonal Layering 카드 쉐도우 (소프트하고 은은하게) */
+.shadow-soft {
+  box-shadow: 0px 8px 24px rgba(0, 0, 0, 0.04);
+}
+
+/* 스크롤바 디자인 최적화 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-bamboo-border);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-bamboo-text-muted);
+}

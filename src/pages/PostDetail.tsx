@@ -1,0 +1,578 @@
+import React, { useState, useEffect } from 'react';
+import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useAuth } from '@/contexts/AuthContext';
+import { supabase, isMockEnabled, mockDb } from '@/lib/supabaseClient';
+import { Layout } from '@/components/Layout';
+import { Calendar, ChevronLeft, MessageSquare, ThumbsUp, Star, AlertCircle, ShieldCheck, CornerDownRight } from 'lucide-react';
+
+interface PostDetailData {
+  id: string;
+  title: string;
+  content: string;
+  status: 'pending' | 'accepted' | 'rejected';
+  admin_comment: string | null;
+  created_at: string;
+}
+
+interface CommentItem {
+  id: string;
+  content: string;
+  created_at: string;
+}
+
+export const PostDetail: React.FC = () => {
+  const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const { user } = useAuth();
+
+  // 데이터 상태
+  const [post, setPost] = useState<PostDetailData | null>(null);
+  const [comments, setComments] = useState<CommentItem[]>([]);
+  const [newComment, setNewComment] = useState('');
+  
+  // 투표 통계 및 유저 투표 상태
+  const [voteStats, setVoteStats] = useState({ totalCount: 0, averageScore: 0, distribution: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 } as Record<number, number> });
+  const [userVotedScore, setUserVotedScore] = useState<number | null>(null); // null 이면 미투표
+  
+  // 관리자 전용 제어 상태
+  const [adminStatus, setAdminStatus] = useState<'pending' | 'accepted' | 'rejected'>('pending');
+  const [adminCommentInput, setAdminCommentInput] = useState('');
+
+  // UI 상태
+  const [loading, setLoading] = useState(true);
+  const [submittingComment, setSubmittingComment] = useState(false);
+  const [submittingVote, setSubmittingVote] = useState(false);
+  const [submittingAdmin, setSubmittingAdmin] = useState(false);
+  const [error, setError] = useState('');
+
+  const loadAllData = async () => {
+    if (!id) return;
+    setLoading(true);
+    setError('');
+
+    try {
+      if (isMockEnabled) {
+        // 1. 게시글 상세 조회
+        const postData = await mockDb.getPostById(id);
+        if (!postData) {
+          setError('해당 게시글을 찾을 수 없습니다.');
+          return;
+        }
+        setPost(postData);
+        setAdminStatus(postData.status);
+        setAdminCommentInput(postData.admin_comment || '');
+
+        // 2. 댓글 목록 조회
+        const commentsList = await mockDb.getComments(id);
+        setComments(commentsList);
+
+        // 3. 투표 정보 및 통계 조회
+        const stats = await mockDb.getVotes(id);
+        setVoteStats(stats);
+
+        // 4. 유저가 로그인해있다면 중복투표 여부 검사
+        if (user) {
+          const userVote = await mockDb.getUserVote(id, user.id);
+          if (userVote) {
+            setUserVotedScore(userVote.score);
+          }
+        }
+      } else {
+        // 실제 Supabase 연동
+        // 1. 게시글 로드
+        const { data: postData, error: postError } = await supabase
+          .from('posts')
+          .select('*')
+          .eq('id', id)
+          .single();
+
+        if (postError || !postData) {
+          setError('게시글을 찾을 수 없거나 데이터베이스 오류가 발생했습니다.');
+          return;
+        }
+        setPost(postData);
+        setAdminStatus(postData.status);
+        setAdminCommentInput(postData.admin_comment || '');
+
+        // 2. 댓글 로드
+        const { data: commentsList, error: commentsError } = await supabase
+          .from('comments')
+          .select('*')
+          .eq('post_id', id)
+          .order('created_at', { ascending: true });
+
+        if (!commentsError && commentsList) {
+          setComments(commentsList);
+        }
+
+        // 3. 투표 통계 연산
+        const { data: votesList, error: votesError } = await supabase
+          .from('votes')
+          .select('score, user_id')
+          .eq('post_id', id);
+
+        if (!votesError && votesList) {
+          const totalCount = votesList.length;
+          let averageScore = 0;
+          const distribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+          
+          if (totalCount > 0) {
+            const sum = votesList.reduce((acc, v) => {
+              const scoreVal = v.score as 1 | 2 | 3 | 4 | 5;
+              distribution[scoreVal] = (distribution[scoreVal] || 0) + 1;
+              return acc + v.score;
+            }, 0);
+            averageScore = Number((sum / totalCount).toFixed(1));
+          }
+
+          setVoteStats({ totalCount, averageScore, distribution });
+
+          // 4. 로그인 유저의 중복 투표 사전 검출
+          if (user) {
+            const userVote = votesList.find((v) => v.user_id === user.id);
+            if (userVote) {
+              setUserVotedScore(userVote.score);
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      setError('데이터를 가져오는 중 문제가 발생했습니다: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadAllData();
+  }, [id, user]);
+
+  // 댓글 등록
+  const handleCommentSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) {
+      alert('댓글을 작성하려면 먼저 로그인해 주세요.');
+      navigate('/login');
+      return;
+    }
+    if (!newComment.trim() || !id) return;
+
+    setSubmittingComment(true);
+    try {
+      if (isMockEnabled) {
+        const comment = await mockDb.createComment(id, newComment);
+        setComments([...comments, comment]);
+      } else {
+        // 실제 댓글 삽입 (작성자 식별을 저장하지 않음)
+        const { data, error: insertError } = await supabase
+          .from('comments')
+          .insert([{ post_id: id, content: newComment }])
+          .select();
+
+        if (insertError) throw insertError;
+        if (data) {
+          setComments([...comments, data[0]]);
+        }
+      }
+      setNewComment('');
+    } catch (err: any) {
+      alert('댓글 등록 실패: ' + err.message);
+    } finally {
+      setSubmittingComment(false);
+    }
+  };
+
+  // 공감도 투표 실행
+  const handleVote = async (score: number) => {
+    if (!user) {
+      alert('공감 투표는 로그인한 사용자만 참여 가능합니다.');
+      navigate('/login');
+      return;
+    }
+    if (!id || userVotedScore !== null || submittingVote) return;
+
+    setSubmittingVote(true);
+    try {
+      if (isMockEnabled) {
+        await mockDb.vote(id, user.id, score);
+      } else {
+        // 실제 Supabase 삽입
+        const { error: voteError } = await supabase
+          .from('votes')
+          .insert([{ post_id: id, user_id: user.id, score }]);
+
+        if (voteError) throw voteError;
+      }
+
+      setUserVotedScore(score);
+      
+      // 투표 통계 강제 리로드
+      if (isMockEnabled) {
+        const stats = await mockDb.getVotes(id);
+        setVoteStats(stats);
+      } else {
+        const { data: votesList } = await supabase
+          .from('votes')
+          .select('score')
+          .eq('post_id', id);
+        
+        if (votesList) {
+          const totalCount = votesList.length;
+          let averageScore = 0;
+          const distribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+          if (totalCount > 0) {
+            const sum = votesList.reduce((acc, v) => {
+              const scoreVal = v.score as 1 | 2 | 3 | 4 | 5;
+              distribution[scoreVal] = (distribution[scoreVal] || 0) + 1;
+              return acc + v.score;
+            }, 0);
+            averageScore = Number((sum / totalCount).toFixed(1));
+          }
+          setVoteStats({ totalCount, averageScore, distribution });
+        }
+      }
+      alert('투표해 주셔서 감사합니다!');
+    } catch (err: any) {
+      alert('투표 반영 실패: ' + err.message);
+    } finally {
+      setSubmittingVote(false);
+    }
+  };
+
+  // 관리자 상태 변경 처리
+  const handleAdminUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || user.role !== 'admin' || !id) {
+      alert('권한이 없습니다.');
+      return;
+    }
+
+    setSubmittingAdmin(true);
+    try {
+      if (isMockEnabled) {
+        const updated = await mockDb.updatePostStatus(id, adminStatus, adminCommentInput || null);
+        setPost(updated);
+      } else {
+        const { error: updateError } = await supabase
+          .from('posts')
+          .update({
+            status: adminStatus,
+            admin_comment: adminCommentInput || null,
+          })
+          .eq('id', id);
+
+        if (updateError) throw updateError;
+        
+        setPost((prev) =>
+          prev
+            ? { ...prev, status: adminStatus, admin_comment: adminCommentInput || null }
+            : null
+        );
+      }
+      alert('게시글 상태 및 관리자 의견이 반영되었습니다.');
+    } catch (err: any) {
+      alert('상태 저장 실패: ' + err.message);
+    } finally {
+      setSubmittingAdmin(false);
+    }
+  };
+
+  // 상태 뱃지 생성 함수
+  const getStatusBadge = (status: 'pending' | 'accepted' | 'rejected') => {
+    switch (status) {
+      case 'accepted':
+        return (
+          <span className="text-xs font-semibold bg-status-accepted text-status-accepted-text px-2.5 py-1 rounded-full">
+            수용됨
+          </span>
+        );
+      case 'rejected':
+        return (
+          <span className="text-xs font-semibold bg-status-rejected text-status-rejected-text px-2.5 py-1 rounded-full">
+            불수용
+          </span>
+        );
+      default:
+        return (
+          <span className="text-xs font-semibold bg-status-pending text-status-pending-text px-2.5 py-1 rounded-full">
+            검토 대기
+          </span>
+        );
+    }
+  };
+
+  if (loading) {
+    return (
+      <Layout>
+        <div className="flex flex-col items-center justify-center py-20 space-y-3">
+          <div className="w-10 h-10 border-4 border-brand-blue border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-sm text-bamboo-text-muted">상세 내용을 불러오는 중...</p>
+        </div>
+      </Layout>
+    );
+  }
+
+  if (error || !post) {
+    return (
+      <Layout>
+        <div className="flex items-center gap-2 text-status-rejected-text bg-status-rejected p-4 rounded-bamboo-card mb-4">
+          <AlertCircle className="w-5 h-5 shrink-0" />
+          <span className="text-sm font-medium">{error || '게시글이 존재하지 않습니다.'}</span>
+        </div>
+        <Link to="/board" className="inline-flex items-center gap-1.5 text-sm text-brand-blue font-bold hover:underline">
+          <ChevronLeft className="w-4 h-4" /> 목록으로 돌아가기
+        </Link>
+      </Layout>
+    );
+  }
+
+  return (
+    <Layout>
+      {/* 상단 네비게이션 */}
+      <div className="mb-6">
+        <Link to="/board" className="inline-flex items-center gap-1 text-sm text-bamboo-text-muted hover:text-bamboo-text-main transition-colors font-semibold">
+          <ChevronLeft className="w-4 h-4" /> 목록으로
+        </Link>
+      </div>
+
+      <div className="space-y-6">
+        {/* 게시글 메인 카드 */}
+        <article className="bg-white rounded-bamboo-card p-6 sm:p-8 border border-bamboo-border/30 shadow-soft">
+          <div className="flex items-center justify-between gap-4 mb-4">
+            {getStatusBadge(post.status)}
+            <div className="flex items-center gap-1 text-xs text-bamboo-text-muted/70">
+              <Calendar className="w-4 h-4" />
+              <span>{new Date(post.created_at).toLocaleDateString('ko-KR', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+              })}</span>
+            </div>
+          </div>
+
+          <h1 className="text-lg sm:text-xl font-bold text-bamboo-text-main mb-4 leading-tight">
+            {post.title}
+          </h1>
+
+          <p className="text-sm sm:text-base text-bamboo-text-muted/95 leading-relaxed whitespace-pre-wrap pb-6 border-b border-bamboo-border/40">
+            {post.content}
+          </p>
+
+          <div className="flex items-center justify-between pt-4 text-xs text-bamboo-text-muted">
+            <span className="font-semibold text-bamboo-text-muted/80 bg-gray-100 px-2.5 py-1 rounded">
+              익명 대나무
+            </span>
+            <div className="flex items-center gap-4">
+              <span className="flex items-center gap-1">
+                <ThumbsUp className="w-3.5 h-3.5 text-brand-blue" />
+                공감 평균 <strong className="text-brand-blue font-bold">{voteStats.averageScore}</strong>
+                <span className="text-[10px] text-bamboo-text-muted/60">({voteStats.totalCount}명 참여)</span>
+              </span>
+            </div>
+          </div>
+        </article>
+
+        {/* 관리자 처리 의견 및 뱃지 노출 (일반 유저에게 노출되는 수용/불수용 내역) */}
+        {post.status !== 'pending' && (
+          <div className={`rounded-bamboo-card p-6 border shadow-soft ${
+            post.status === 'accepted' 
+              ? 'bg-blue-50/50 border-blue-100' 
+              : 'bg-red-50/30 border-red-100'
+          }`}>
+            <div className="flex items-center gap-2 mb-3">
+              <ShieldCheck className={`w-5 h-5 ${
+                post.status === 'accepted' ? 'text-brand-blue' : 'text-status-rejected-text'
+              }`} />
+              <h3 className="text-sm font-bold text-bamboo-text-main">
+                운영진 고충 처리 결과 ({post.status === 'accepted' ? '수용' : '불수용'})
+              </h3>
+            </div>
+            {post.admin_comment ? (
+              <p className="text-sm text-bamboo-text-muted/95 leading-relaxed pl-7">
+                {post.admin_comment}
+              </p>
+            ) : (
+              <p className="text-xs text-bamboo-text-muted italic pl-7">
+                등록된 상세 처리 의견이 없습니다.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* 공감도 투표 컴포넌트 */}
+        <section className="bg-white rounded-bamboo-card p-6 border border-bamboo-border/30 shadow-soft">
+          <h3 className="text-sm font-bold text-bamboo-text-main mb-1">이 고충에 얼마나 공감하시나요?</h3>
+          <p className="text-xs text-bamboo-text-muted mb-4">공감 점수를 매겨주세요 (1점: 낮음 ~ 5점: 매우 공감)</p>
+          
+          <div className="flex items-center gap-2 mb-4">
+            {[1, 2, 3, 4, 5].map((score) => {
+              const isSelected = userVotedScore === score;
+              const hasVotedAny = userVotedScore !== null;
+              
+              return (
+                <button
+                  key={score}
+                  onClick={() => handleVote(score)}
+                  disabled={hasVotedAny || submittingVote}
+                  className={`flex-1 flex flex-col items-center justify-center py-2.5 rounded-bamboo-input font-bold transition-all ${
+                    isSelected
+                      ? 'bg-brand-blue text-white shadow-soft scale-105'
+                      : hasVotedAny
+                      ? 'bg-gray-100 text-gray-300 cursor-not-allowed'
+                      : 'bg-gray-50 text-bamboo-text-muted hover:bg-brand-blue/10 hover:text-brand-blue border border-transparent hover:border-brand-blue/30'
+                  }`}
+                >
+                  <Star className={`w-4 h-4 mb-0.5 ${
+                    isSelected ? 'fill-white text-white' : 'text-current'
+                  }`} />
+                  <span className="text-xs">{score}점</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {userVotedScore !== null && (
+            <div className="bg-blue-50 text-brand-blue px-3 py-2 rounded-bamboo-input text-xs font-semibold text-center">
+              🎉 이미 {userVotedScore}점으로 공감 투표에 참여하셨습니다. (중복 투표 차단됨)
+            </div>
+          )}
+
+          {!user && (
+            <div className="text-center text-xs text-bamboo-text-muted/80 bg-gray-50 py-2 rounded">
+              투표를 하려면{' '}
+              <Link to="/login" className="text-brand-blue font-semibold hover:underline">
+                로그인
+              </Link>
+              이 필요합니다.
+            </div>
+          )}
+        </section>
+
+        {/* [관리자 전용] 처리 상태 변경 패널 */}
+        {user?.role === 'admin' && (
+          <section className="bg-stone-50 border-2 border-dashed border-bamboo-border rounded-bamboo-card p-6 shadow-soft">
+            <div className="flex items-center gap-2 mb-4 pb-2 border-b border-bamboo-border">
+              <ShieldCheck className="w-5 h-5 text-brand-blue" />
+              <h3 className="text-sm font-extrabold text-bamboo-text-main">
+                운영 총괄 관리자 패널 (Admin Only)
+              </h3>
+            </div>
+            
+            <form onSubmit={handleAdminUpdate} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-bamboo-text-muted mb-1.5">
+                  건의 처리 상태 설정
+                </label>
+                <select
+                  value={adminStatus}
+                  onChange={(e) => setAdminStatus(e.target.value as any)}
+                  className="w-full sm:w-48 px-3 py-2 text-sm bg-white border border-bamboo-border rounded-bamboo-input outline-none focus:border-brand-blue transition-colors"
+                >
+                  <option value="pending">검토 대기 (pending)</option>
+                  <option value="accepted">수용 처리 (accepted)</option>
+                  <option value="rejected">불수용 처리 (rejected)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-bamboo-text-muted mb-1.5">
+                  관리자 의견 (일반 수강생에게 공개됨)
+                </label>
+                <textarea
+                  rows={4}
+                  placeholder="의견을 남겨 수강생들의 고충에 적극적인 피드백을 전달해 주세요."
+                  value={adminCommentInput}
+                  onChange={(e) => setAdminCommentInput(e.target.value)}
+                  className="w-full px-3.5 py-2.5 text-sm bg-white border border-bamboo-border rounded-bamboo-input outline-none focus:border-brand-blue transition-all resize-none"
+                />
+              </div>
+
+              <div className="flex justify-end">
+                <button
+                  type="submit"
+                  disabled={submittingAdmin}
+                  className="px-5 py-2.5 bg-brand-blue hover:bg-brand-blue-hover text-white text-xs font-bold rounded-bamboo-input shadow-soft transition-colors disabled:opacity-50"
+                >
+                  {submittingAdmin ? '의견 적용 중...' : '처리 결과 저장'}
+                </button>
+              </div>
+            </form>
+          </section>
+        )}
+
+        {/* 댓글 피드 영역 */}
+        <section className="bg-white rounded-bamboo-card p-6 border border-bamboo-border/30 shadow-soft">
+          <div className="flex items-center gap-1.5 mb-6">
+            <MessageSquare className="w-5 h-5 text-bamboo-text-muted" />
+            <h3 className="text-sm font-bold text-bamboo-text-main">
+              댓글 피드 ({comments.length})
+            </h3>
+          </div>
+
+          {/* 댓글 목록 */}
+          {comments.length === 0 ? (
+            <div className="text-center py-8 text-xs text-bamboo-text-muted/75 italic border-b border-bamboo-border/30 mb-6">
+              아직 등록된 댓글이 없습니다. 첫 댓글을 남겨보세요!
+            </div>
+          ) : (
+            <div className="space-y-4 mb-6 pb-6 border-b border-bamboo-border/30">
+              {comments.map((comment) => (
+                <div key={comment.id} className="flex items-start gap-2 text-sm bg-gray-50/50 p-4 rounded-bamboo-card border border-bamboo-border/20">
+                  <div className="flex-1">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-xs font-bold text-bamboo-text-muted">익명 대나무</span>
+                      <span className="text-[10px] text-bamboo-text-muted/60">
+                        {new Date(comment.created_at).toLocaleDateString('ko-KR', {
+                          month: 'numeric',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </span>
+                    </div>
+                    <p className="text-bamboo-text-main text-xs sm:text-sm leading-relaxed whitespace-pre-wrap">
+                      {comment.content}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* 댓글 작성창 */}
+          {user ? (
+            <form onSubmit={handleCommentSubmit} className="space-y-3">
+              <textarea
+                required
+                rows={3}
+                placeholder="댓글 역시 완전히 익명으로 게시되니 안심하고 기재해 주세요."
+                value={newComment}
+                onChange={(e) => setNewComment(e.target.value)}
+                className="w-full px-3.5 py-2.5 text-xs sm:text-sm bg-gray-50 border border-transparent rounded-bamboo-input focus:bg-white focus:border-brand-blue outline-none transition-all resize-none"
+              />
+              <div className="flex justify-end">
+                <button
+                  type="submit"
+                  disabled={submittingComment || !newComment.trim()}
+                  className="px-4 py-2 bg-brand-blue hover:bg-brand-blue-hover text-white text-xs font-bold rounded-bamboo-input shadow-soft transition-colors disabled:opacity-50"
+                >
+                  {submittingComment ? '게시 중...' : '댓글 등록'}
+                </button>
+              </div>
+            </form>
+          ) : (
+            <div className="bg-gray-50 rounded-bamboo-input p-4 text-center text-xs text-bamboo-text-muted">
+              댓글을 쓰려면{' '}
+              <Link to="/login" className="text-brand-blue font-semibold hover:underline">
+                로그인
+              </Link>
+              이 필요합니다.
+            </div>
+          )}
+        </section>
+      </div>
+    </Layout>
+  );
+};
