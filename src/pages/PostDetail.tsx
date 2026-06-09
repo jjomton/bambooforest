@@ -3,7 +3,8 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase, isMockEnabled, mockDb } from '@/lib/supabaseClient';
 import { Layout } from '@/components/Layout';
-import { Calendar, ChevronLeft, MessageSquare, ThumbsUp, Star, AlertCircle, ShieldCheck, CornerDownRight } from 'lucide-react';
+import { Calendar, ChevronLeft, MessageSquare, ThumbsUp, Star, AlertCircle, ShieldCheck, CornerDownRight, Flag } from 'lucide-react';
+import { containsProfanity, getDetectedProfanities } from '@/lib/profanityFilter';
 
 interface PostDetailData {
   id: string;
@@ -11,13 +12,16 @@ interface PostDetailData {
   content: string;
   status: 'pending' | 'accepted' | 'rejected';
   admin_comment: string | null;
+  is_blinded: boolean;
   created_at: string;
 }
 
 interface CommentItem {
   id: string;
   content: string;
+  is_blinded: boolean;
   created_at: string;
+  parent_id?: string | null;
 }
 
 export const PostDetail: React.FC = () => {
@@ -41,6 +45,10 @@ export const PostDetail: React.FC = () => {
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editCommentContent, setEditCommentContent] = useState('');
   
+  // 답글 모드 상태
+  const [replyingToId, setReplyingToId] = useState<string | null>(null);
+  const [replyContent, setReplyContent] = useState('');
+  
   // 투표 통계 및 유저 투표 상태
   const [voteStats, setVoteStats] = useState({ totalCount: 0, averageScore: 0, distribution: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 } as Record<number, number> });
   const [userVotedScore, setUserVotedScore] = useState<number | null>(null); // null 이면 미투표
@@ -54,6 +62,7 @@ export const PostDetail: React.FC = () => {
   const [submittingComment, setSubmittingComment] = useState(false);
   const [submittingVote, setSubmittingVote] = useState(false);
   const [submittingAdmin, setSubmittingAdmin] = useState(false);
+  const [submittingReport, setSubmittingReport] = useState(false);
   const [error, setError] = useState('');
 
   const loadAllData = async () => {
@@ -63,8 +72,8 @@ export const PostDetail: React.FC = () => {
 
     try {
       if (isMockEnabled) {
-        // 1. 게시글 상세 조회
-        const postData = await mockDb.getPostById(id);
+        // 1. 게시글 상세 조회 (블라인드 여부에 상관없이 가져와 프론트에서 분기 판단)
+        const postData = await mockDb.getPostById(id, true);
         if (!postData) {
           setError('해당 게시글을 찾을 수 없습니다.');
           return;
@@ -73,8 +82,8 @@ export const PostDetail: React.FC = () => {
         setAdminStatus(postData.status);
         setAdminCommentInput(postData.admin_comment || '');
 
-        // 2. 댓글 목록 조회
-        const commentsList = await mockDb.getComments(id);
+        // 2. 댓글 목록 조회 (블라인드 여부에 상관없이 가져와 프론트에서 가공)
+        const commentsList = await mockDb.getComments(id, true);
         setComments(commentsList);
 
         // 3. 투표 정보 및 통계 조회
@@ -90,7 +99,7 @@ export const PostDetail: React.FC = () => {
         }
       } else {
         // 실제 Supabase 연동
-        // 1. 게시글 로드
+        // 1. 게시글 로드 (is_blinded 속성이 스키마에 추가되었으므로 select에 포함됨)
         const { data: postData, error: postError } = await supabase
           .from('posts')
           .select('*')
@@ -179,26 +188,36 @@ export const PostDetail: React.FC = () => {
     loadAllData();
   }, [id, user]);
 
-  // 댓글 등록
-  const handleCommentSubmit = async (e: React.FormEvent) => {
+  // 댓글 작성 처리 (대댓글 포함)
+  const handleCommentSubmit = async (e: React.FormEvent, parentId: string | null = null) => {
     e.preventDefault();
     if (!user) {
-      alert('댓글을 작성하려면 먼저 로그인해 주세요.');
+      alert('댓글 작성을 위해 로그인이 필요합니다.');
       navigate('/login');
       return;
     }
-    if (!newComment.trim() || !id) return;
+
+    const contentToSubmit = parentId ? replyContent : newComment;
+    if (!id || !contentToSubmit.trim() || submittingComment) return;
+
+    // 비속어 필터링
+    if (containsProfanity(contentToSubmit)) {
+      const badWords = getDetectedProfanities(contentToSubmit);
+      alert(`댓글 내용에 부적절한 비속어가 포함되어 있어 등록할 수 없습니다. (감지된 단어: ${badWords.join(', ')})`);
+      return;
+    }
 
     setSubmittingComment(true);
     try {
       if (isMockEnabled) {
-        const comment = await mockDb.createComment(id, newComment);
-        setComments([...comments, comment]);
+        const added = await mockDb.createComment(id, contentToSubmit, parentId);
+        setComments([...comments, added as CommentItem]);
+        setMyCommentIds((prev) => new Set(prev).add(added.id));
       } else {
         // 실제 댓글 삽입 (작성자 식별을 저장하지 않음)
         const { data, error: insertError } = await supabase
           .from('comments')
-          .insert([{ post_id: id, content: newComment }])
+          .insert([{ post_id: id, content: contentToSubmit, parent_id: parentId }])
           .select();
 
         if (insertError) throw insertError;
@@ -206,12 +225,81 @@ export const PostDetail: React.FC = () => {
           setComments([...comments, data[0]]);
           setMyCommentIds((prev) => new Set(prev).add(data[0].id));
         }
+      } // <- 이 중괄호가 빠져있었음
+      
+      if (parentId) {
+        setReplyContent('');
+        setReplyingToId(null);
+      } else {
+        setNewComment('');
       }
-      setNewComment('');
     } catch (err: any) {
       alert('댓글 등록 실패: ' + err.message);
     } finally {
       setSubmittingComment(false);
+    }
+  };
+
+  // 게시글 신고
+  const handleReportPost = async () => {
+    if (!user) {
+      alert('신고를 하려면 먼저 로그인해 주세요.');
+      navigate('/login');
+      return;
+    }
+    if (!id) return;
+
+    const reason = prompt('이 게시글을 신고하는 사유를 입력해 주세요:');
+    if (reason === null) return; // 취소
+
+    setSubmittingReport(true);
+    try {
+      if (isMockEnabled) {
+        await mockDb.reportPost(id, user.id, reason);
+      } else {
+        const { error: reportError } = await supabase
+          .from('reports')
+          .insert([{ post_id: id, user_id: user.id, reason }]);
+
+        if (reportError) throw reportError;
+      }
+      alert('신고가 성공적으로 접수되었습니다. (동일 게시물 누적 3회 신고 시 자동 블라인드 처리)');
+      loadAllData(); // 화면 갱신
+    } catch (err: any) {
+      alert('신고 처리 실패: ' + err.message);
+    } finally {
+      setSubmittingReport(false);
+    }
+  };
+
+  // 댓글 신고
+  const handleReportComment = async (commentId: string) => {
+    if (!user) {
+      alert('신고를 하려면 먼저 로그인해 주세요.');
+      navigate('/login');
+      return;
+    }
+
+    const reason = prompt('이 댓글을 신고하는 사유를 입력해 주세요:');
+    if (reason === null) return; // 취소
+
+    setSubmittingReport(true);
+    try {
+      if (isMockEnabled) {
+        await mockDb.reportComment(commentId, user.id, reason);
+      } else {
+        const { error: reportError } = await supabase
+          .from('reports')
+          .insert([{ comment_id: commentId, user_id: user.id, reason }]);
+
+        if (reportError) throw reportError;
+      }
+      alert('댓글 신고가 접수되었습니다. (동일 댓글 누적 3회 신고 시 자동 블라인드 처리)');
+      loadAllData(); // 화면 갱신
+    } catch (err: any) {
+      alert('신고 처리 실패: ' + err.message);
+    } finally {
+      setSubmittingReport(false);
     }
   };
 
@@ -418,6 +506,28 @@ export const PostDetail: React.FC = () => {
     );
   }
 
+  if (post && post.is_blinded && user?.role !== 'admin') {
+    return (
+      <Layout>
+        <div className="max-w-[500px] mx-auto my-20 bg-white rounded-bamboo-card p-8 shadow-soft border border-status-rejected/30 text-center">
+          <div className="w-16 h-16 bg-red-50 text-status-rejected-text rounded-full flex items-center justify-center mx-auto mb-4">
+            <AlertCircle className="w-8 h-8" />
+          </div>
+          <h2 className="text-lg font-bold text-bamboo-text-main">블라인드 처리된 건의글입니다.</h2>
+          <p className="text-sm text-bamboo-text-muted mt-2 mb-6">
+            이 게시글은 다수의 수강생들의 신고 누적(3회 이상) 또는 커뮤니티 가이드라인 위반으로 인해 블라인드 처리되었습니다.
+          </p>
+          <Link
+            to="/board"
+            className="inline-block px-5 py-2.5 bg-brand-blue hover:bg-brand-blue-hover text-white text-xs font-bold rounded-bamboo-input shadow-soft transition-colors"
+          >
+            대나무숲 피드로 돌아가기
+          </Link>
+        </div>
+      </Layout>
+    );
+  }
+
   if (error || !post) {
     return (
       <Layout>
@@ -444,6 +554,13 @@ export const PostDetail: React.FC = () => {
       <div className="space-y-6">
         {/* 게시글 메인 카드 */}
         <article className="bg-white rounded-bamboo-card p-6 sm:p-8 border border-bamboo-border/30 shadow-soft">
+          {post.is_blinded && user?.role === 'admin' && (
+            <div className="mb-4 bg-status-rejected text-status-rejected-text px-4 py-2.5 rounded-bamboo-input text-xs font-bold flex items-center gap-2 shadow-sm">
+              <AlertCircle className="w-4 h-4" />
+              <span>관리자 안내: 이 게시글은 신고 누적으로 블라인드 처리되었습니다. (일반 사용자에게 노출되지 않음)</span>
+            </div>
+          )}
+
           <div className="flex items-center justify-between gap-4 mb-4">
             {getStatusBadge(post.status)}
             <div className="flex items-center gap-1 text-xs text-bamboo-text-muted/70">
@@ -524,6 +641,15 @@ export const PostDetail: React.FC = () => {
                 공감 평균 <strong className="text-brand-blue font-bold">{voteStats.averageScore}</strong>
                 <span className="text-[10px] text-bamboo-text-muted/60">({voteStats.totalCount}명 참여)</span>
               </span>
+              <button
+                onClick={handleReportPost}
+                disabled={submittingReport}
+                className="flex items-center gap-1 text-bamboo-text-muted/60 hover:text-status-rejected-text transition-colors font-semibold cursor-pointer"
+                title="신고하기"
+              >
+                <Flag className="w-3.5 h-3.5" />
+                <span>신고</span>
+              </button>
             </div>
           </div>
         </article>
@@ -560,7 +686,7 @@ export const PostDetail: React.FC = () => {
           <h3 className="text-sm font-bold text-bamboo-text-main mb-1">이 고충에 얼마나 공감하시나요?</h3>
           <p className="text-xs text-bamboo-text-muted mb-4">공감 점수를 매겨주세요 (1점: 낮음 ~ 5점: 매우 공감)</p>
           
-          <div className="flex items-center gap-2 mb-4">
+          <div className="grid grid-cols-5 gap-1.5 sm:gap-3 mb-4">
             {[1, 2, 3, 4, 5].map((score) => {
               const isSelected = userVotedScore === score;
               
@@ -569,7 +695,7 @@ export const PostDetail: React.FC = () => {
                   key={score}
                   onClick={() => handleVote(score)}
                   disabled={submittingVote}
-                  className={`flex-1 flex flex-col items-center justify-center py-2.5 rounded-bamboo-input font-bold transition-all ${
+                  className={`flex flex-col items-center justify-center py-2.5 rounded-bamboo-input font-bold transition-all ${
                     isSelected
                       ? 'bg-brand-blue text-white shadow-soft scale-105'
                       : 'bg-gray-50 text-bamboo-text-muted hover:bg-brand-blue/10 hover:text-brand-blue border border-transparent hover:border-brand-blue/30'
@@ -669,50 +795,168 @@ export const PostDetail: React.FC = () => {
             </div>
           ) : (
             <div className="space-y-4 mb-6 pb-6 border-b border-bamboo-border/30">
-              {comments.map((comment) => (
-                <div key={comment.id} className="flex items-start gap-2 text-sm bg-gray-50/50 p-4 rounded-bamboo-card border border-bamboo-border/20">
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-bamboo-text-muted">익명 대나무</span>
-                        {myCommentIds.has(comment.id) && (
+              {comments.filter(c => !c.parent_id).map((comment) => (
+                <div key={comment.id} className="space-y-3">
+                  {/* 원본(부모) 댓글 */}
+                  <div className="flex items-start gap-2 text-sm bg-gray-50/50 p-4 rounded-bamboo-card border border-bamboo-border/20">
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-bamboo-text-muted">익명 대나무</span>
                           <div className="flex items-center gap-1.5 pl-2 ml-1 border-l border-bamboo-border">
-                            <button onClick={() => { setEditingCommentId(comment.id); setEditCommentContent(comment.content); }} className="px-1.5 py-0.5 text-[10px] font-bold bg-gray-100 hover:bg-brand-blue hover:text-white text-bamboo-text-muted rounded transition-colors border border-gray-200 shadow-sm">
-                              수정
-                            </button>
-                            <button onClick={() => handleDeleteComment(comment.id)} className="px-1.5 py-0.5 text-[10px] font-bold bg-gray-100 hover:bg-status-rejected text-status-rejected-text rounded transition-colors border border-status-rejected-text/30 shadow-sm">
-                              삭제
-                            </button>
+                            {myCommentIds.has(comment.id) && !comment.is_blinded && (
+                              <>
+                                <button onClick={() => { setEditingCommentId(comment.id); setEditCommentContent(comment.content); }} className="px-1.5 py-0.5 text-[10px] font-bold bg-gray-100 hover:bg-brand-blue hover:text-white text-bamboo-text-muted rounded transition-colors border border-gray-200 shadow-sm">
+                                  수정
+                                </button>
+                                <button onClick={() => handleDeleteComment(comment.id)} className="px-1.5 py-0.5 text-[10px] font-bold bg-gray-100 hover:bg-status-rejected text-status-rejected-text rounded transition-colors border border-status-rejected-text/30 shadow-sm">
+                                  삭제
+                                </button>
+                              </>
+                            )}
+                            {!comment.is_blinded && (
+                              <button onClick={() => setReplyingToId(replyingToId === comment.id ? null : comment.id)} className="px-1.5 py-0.5 text-[10px] font-bold bg-gray-100 hover:bg-brand-blue hover:text-white text-bamboo-text-muted rounded transition-colors border border-gray-200 shadow-sm">
+                                답글
+                              </button>
+                            )}
                           </div>
-                        )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] text-bamboo-text-muted/60">
+                            {new Date(comment.created_at).toLocaleDateString('ko-KR', {
+                              month: 'numeric',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </span>
+                          {(!comment.is_blinded || user?.role === 'admin') && (
+                            <button
+                              type="button"
+                              onClick={() => handleReportComment(comment.id)}
+                              disabled={submittingReport}
+                              className="text-[10px] text-bamboo-text-muted/50 hover:text-status-rejected-text flex items-center gap-0.5 cursor-pointer font-semibold transition-colors"
+                              title="신고"
+                            >
+                              <Flag className="w-2.5 h-2.5" />
+                              <span>신고</span>
+                            </button>
+                          )}
+                        </div>
                       </div>
-                      <span className="text-[10px] text-bamboo-text-muted/60">
-                        {new Date(comment.created_at).toLocaleDateString('ko-KR', {
-                          month: 'numeric',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </span>
+
+                      {comment.is_blinded && user?.role === 'admin' && (
+                        <div className="text-[10px] text-status-rejected-text font-bold mb-1 bg-red-50 px-2 py-0.5 rounded inline-block">
+                          ⚠️ 관리자 안내: 블라인드 처리된 댓글입니다. (일반 유저에게 가려짐)
+                        </div>
+                      )}
+
+                      {editingCommentId === comment.id ? (
+                        <form onSubmit={(e) => handleEditCommentSubmit(e, comment.id)} className="mt-2 space-y-2">
+                          <textarea
+                            required
+                            rows={2}
+                            value={editCommentContent}
+                            onChange={(e) => setEditCommentContent(e.target.value)}
+                            className="w-full px-3 py-2 text-xs bg-white border border-bamboo-border rounded focus:border-brand-blue outline-none resize-none transition-all"
+                          />
+                          <div className="flex justify-end gap-2">
+                            <button type="button" onClick={() => setEditingCommentId(null)} className="text-xs text-bamboo-text-muted hover:text-bamboo-text-main font-semibold">취소</button>
+                            <button type="submit" className="text-xs text-brand-blue hover:text-brand-blue-hover font-bold">완료</button>
+                          </div>
+                        </form>
+                      ) : (
+                        <p className={`text-bamboo-text-main text-xs sm:text-sm leading-relaxed whitespace-pre-wrap ${
+                          comment.is_blinded && user?.role !== 'admin' ? 'text-status-rejected-text/70 italic bg-red-50/20 px-2.5 py-1.5 rounded border border-status-rejected/10' : ''
+                        }`}>
+                          {comment.is_blinded && user?.role !== 'admin'
+                            ? '신고 누적으로 인해 블라인드 처리된 댓글입니다.'
+                            : comment.content}
+                        </p>
+                      )}
                     </div>
-                    {editingCommentId === comment.id ? (
-                      <form onSubmit={(e) => handleEditCommentSubmit(e, comment.id)} className="mt-2 space-y-2">
+                  </div>
+
+                  {/* 대댓글 및 답글 폼 영역 */}
+                  <div className="pl-6 sm:pl-8 space-y-3">
+                    {comments.filter(reply => reply.parent_id === comment.id).map(reply => (
+                      <div key={reply.id} className="flex items-start gap-2 text-sm bg-gray-50/80 p-3 rounded-bamboo-card border border-bamboo-border/10 relative">
+                        <CornerDownRight className="w-4 h-4 text-bamboo-text-muted/40 absolute -left-5 sm:-left-7 top-3" />
+                        <div className="flex-1">
+                          <div className="flex items-center justify-between mb-1.5">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold text-bamboo-text-muted">익명 대나무</span>
+                              {myCommentIds.has(reply.id) && !reply.is_blinded && (
+                                <div className="flex items-center gap-1.5 pl-2 ml-1 border-l border-bamboo-border">
+                                  <button onClick={() => { setEditingCommentId(reply.id); setEditCommentContent(reply.content); }} className="px-1.5 py-0.5 text-[10px] font-bold bg-gray-100 hover:bg-brand-blue hover:text-white text-bamboo-text-muted rounded transition-colors border border-gray-200 shadow-sm">수정</button>
+                                  <button onClick={() => handleDeleteComment(reply.id)} className="px-1.5 py-0.5 text-[10px] font-bold bg-gray-100 hover:bg-status-rejected text-status-rejected-text rounded transition-colors border border-status-rejected-text/30 shadow-sm">삭제</button>
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] text-bamboo-text-muted/60">
+                                {new Date(reply.created_at).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                              {(!reply.is_blinded || user?.role === 'admin') && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleReportComment(reply.id)}
+                                  disabled={submittingReport}
+                                  className="text-[10px] text-bamboo-text-muted/50 hover:text-status-rejected-text flex items-center gap-0.5 cursor-pointer font-semibold transition-colors"
+                                  title="신고"
+                                >
+                                  <Flag className="w-2.5 h-2.5" />
+                                  <span>신고</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {reply.is_blinded && user?.role === 'admin' && (
+                            <div className="text-[10px] text-status-rejected-text font-bold mb-1 bg-red-50 px-2 py-0.5 rounded inline-block">
+                              ⚠️ 관리자 안내: 블라인드 처리된 댓글입니다. (일반 유저에게 가려짐)
+                            </div>
+                          )}
+
+                          {editingCommentId === reply.id ? (
+                            <form onSubmit={(e) => handleEditCommentSubmit(e, reply.id)} className="mt-2 space-y-2">
+                              <textarea required rows={2} value={editCommentContent} onChange={(e) => setEditCommentContent(e.target.value)} className="w-full px-3 py-2 text-xs bg-white border border-bamboo-border rounded focus:border-brand-blue outline-none resize-none transition-all" />
+                              <div className="flex justify-end gap-2">
+                                <button type="button" onClick={() => setEditingCommentId(null)} className="text-xs text-bamboo-text-muted hover:text-bamboo-text-main font-semibold">취소</button>
+                                <button type="submit" className="text-xs text-brand-blue hover:text-brand-blue-hover font-bold">완료</button>
+                              </div>
+                            </form>
+                          ) : (
+                            <p className={`text-bamboo-text-main text-xs sm:text-sm leading-relaxed whitespace-pre-wrap ${
+                              reply.is_blinded && user?.role !== 'admin' ? 'text-status-rejected-text/70 italic bg-red-50/20 px-2.5 py-1.5 rounded border border-status-rejected/10' : ''
+                            }`}>
+                              {reply.is_blinded && user?.role !== 'admin'
+                                ? '신고 누적으로 인해 블라인드 처리된 댓글입니다.'
+                                : reply.content}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+
+                    {replyingToId === comment.id && (
+                      <form onSubmit={(e) => handleCommentSubmit(e, comment.id)} className="flex flex-col gap-2 relative mt-2">
+                        <CornerDownRight className="w-4 h-4 text-bamboo-text-muted/40 absolute -left-5 sm:-left-7 top-3" />
                         <textarea
                           required
                           rows={2}
-                          value={editCommentContent}
-                          onChange={(e) => setEditCommentContent(e.target.value)}
-                          className="w-full px-3 py-2 text-xs bg-white border border-bamboo-border rounded focus:border-brand-blue outline-none resize-none transition-all"
+                          placeholder="답글을 입력하세요 (익명 보장)"
+                          value={replyContent}
+                          onChange={(e) => setReplyContent(e.target.value)}
+                          className="w-full px-3 py-2 text-xs sm:text-sm bg-white border border-brand-blue/30 rounded focus:bg-white focus:border-brand-blue outline-none transition-all resize-none shadow-sm"
                         />
                         <div className="flex justify-end gap-2">
-                          <button type="button" onClick={() => setEditingCommentId(null)} className="text-xs text-bamboo-text-muted hover:text-bamboo-text-main font-semibold">취소</button>
-                          <button type="submit" className="text-xs text-brand-blue hover:text-brand-blue-hover font-bold">완료</button>
+                          <button type="button" onClick={() => setReplyingToId(null)} className="px-3 py-1.5 text-xs font-semibold text-bamboo-text-muted hover:text-bamboo-text-main transition-colors">취소</button>
+                          <button type="submit" disabled={submittingComment || !replyContent.trim()} className="px-3 py-1.5 text-xs font-bold bg-brand-blue hover:bg-brand-blue-hover text-white rounded shadow-soft transition-colors disabled:opacity-50">
+                            {submittingComment ? '등록 중...' : '답글 달기'}
+                          </button>
                         </div>
                       </form>
-                    ) : (
-                      <p className="text-bamboo-text-main text-xs sm:text-sm leading-relaxed whitespace-pre-wrap">
-                        {comment.content}
-                      </p>
                     )}
                   </div>
                 </div>
