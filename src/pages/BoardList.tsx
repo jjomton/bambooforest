@@ -25,10 +25,12 @@ export const BoardList: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeQuery, setActiveQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
+  const [showMyPostsOnly, setShowMyPostsOnly] = useState(false);
   const postsPerPage = 5;
 
   // 데이터 상태
   const [posts, setPosts] = useState<PostItem[]>([]);
+  const [myPostIds, setMyPostIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -110,6 +112,27 @@ export const BoardList: React.FC = () => {
           query = query.or(`title.ilike.%${activeQuery}%,content.ilike.%${activeQuery}%`);
         }
 
+        if (user) {
+          const { data: myAuthorships } = await supabase
+            .from('post_authors')
+            .select('post_id');
+            
+          if (myAuthorships) {
+            const myIdsSet = new Set<string>(myAuthorships.map(a => a.post_id));
+            setMyPostIds(myIdsSet);
+            
+            if (showMyPostsOnly) {
+              if (myIdsSet.size > 0) {
+                query = query.in('id', Array.from(myIdsSet));
+              } else {
+                setPosts([]);
+                setLoading(false);
+                return;
+              }
+            }
+          }
+        }
+
         const { data, error: fetchError } = await query;
         if (fetchError) throw fetchError;
 
@@ -128,7 +151,7 @@ export const BoardList: React.FC = () => {
   useEffect(() => {
     loadPosts();
     setCurrentPage(1); // 검색 쿼리가 변경되면 1페이지로 리셋
-  }, [activeQuery]);
+  }, [activeQuery, showMyPostsOnly, user]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -183,37 +206,56 @@ export const BoardList: React.FC = () => {
   return (
     <Layout>
       {/* 검색 바 및 글쓰기 버튼 상단 영역 */}
-      <div className="flex flex-col sm:flex-row gap-3 items-center justify-between mb-8">
-        <form onSubmit={handleSearchSubmit} className="relative w-full sm:max-w-md">
-          <input
-            type="text"
-            placeholder="제목이나 내용으로 검색해보세요"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-4 py-2.5 bg-white rounded-bamboo-input shadow-soft border border-transparent focus:border-brand-blue outline-none text-sm transition-all"
-          />
-          <Search className="absolute left-3.5 top-3 w-4.5 h-4.5 text-bamboo-text-muted/50" />
-          {searchQuery && (
-            <button
-              type="button"
-              onClick={() => {
-                setSearchQuery('');
-                setActiveQuery('');
-              }}
-              className="absolute right-3 top-2.5 text-xs text-bamboo-text-muted/50 hover:text-bamboo-text-main"
-            >
-              초기화
-            </button>
-          )}
-        </form>
+      <div className="flex flex-col gap-4 mb-8">
+        <div className="flex flex-col sm:flex-row gap-3 items-center justify-between">
+          <form onSubmit={handleSearchSubmit} className="relative w-full sm:max-w-md">
+            <input
+              type="text"
+              placeholder="제목이나 내용으로 검색해보세요"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-10 pr-4 py-2.5 bg-white rounded-bamboo-input shadow-soft border border-transparent focus:border-brand-blue outline-none text-sm transition-all"
+            />
+            <Search className="absolute left-3.5 top-3 w-4.5 h-4.5 text-bamboo-text-muted/50" />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery('');
+                  setActiveQuery('');
+                }}
+                className="absolute right-3 top-2.5 text-xs text-bamboo-text-muted/50 hover:text-bamboo-text-main"
+              >
+                초기화
+              </button>
+            )}
+          </form>
 
-        <button
-          onClick={handleWriteClick}
-          className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-5 py-2.5 bg-brand-blue hover:bg-brand-blue-hover text-white rounded-bamboo-input font-semibold text-sm shadow-soft transition-colors shrink-0"
-        >
-          <PenTool className="w-4 h-4" />
-          건의글 쓰기
-        </button>
+          <button
+            onClick={handleWriteClick}
+            className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-5 py-2.5 bg-brand-blue hover:bg-brand-blue-hover text-white rounded-bamboo-input font-semibold text-sm shadow-soft transition-colors shrink-0"
+          >
+            <PenTool className="w-4 h-4" />
+            건의글 쓰기
+          </button>
+        </div>
+        
+        {/* 내가 쓴 글만 보기 필터 */}
+        {user && (
+          <div className="flex items-center justify-end px-1">
+            <label className="flex items-center gap-2 cursor-pointer group">
+              <input 
+                type="checkbox" 
+                checked={showMyPostsOnly} 
+                onChange={(e) => setShowMyPostsOnly(e.target.checked)} 
+                className="w-4 h-4 text-brand-blue bg-white border-bamboo-border/50 rounded focus:ring-brand-blue focus:ring-2 cursor-pointer transition-all"
+              />
+              <span className="text-sm font-semibold text-bamboo-text-muted group-hover:text-brand-blue transition-colors">
+                내가 쓴 글만 보기
+              </span>
+            </label>
+          </div>
+        )}
       </div>
 
       {/* 로딩 및 에러 처리 */}
@@ -243,7 +285,14 @@ export const BoardList: React.FC = () => {
                 className="block bg-white rounded-bamboo-card p-6 border border-bamboo-border/30 hover:border-brand-blue/30 shadow-soft transition-all duration-200"
               >
                 <div className="flex items-center justify-between gap-4 mb-3">
-                  {getStatusBadge(post.status)}
+                  <div className="flex items-center gap-2">
+                    {getStatusBadge(post.status)}
+                    {myPostIds.has(post.id) && (
+                      <span className="text-[10px] font-bold bg-brand-blue/10 text-brand-blue px-2 py-0.5 rounded border border-brand-blue/20">
+                        내가 쓴 글
+                      </span>
+                    )}
+                  </div>
                   <div className="flex items-center gap-1.5 text-xs text-bamboo-text-muted/70">
                     <Calendar className="w-3.5 h-3.5" />
                     <span>{new Date(post.created_at).toLocaleDateString('ko-KR', {

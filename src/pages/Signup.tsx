@@ -98,6 +98,7 @@ export const Signup: React.FC = () => {
     try {
       if (isMockEnabled) {
         await mockAuth.signUp(email, password, nickname);
+        await mockAuth.signOut(); // 목업 환경에서도 자동 로그인 방지
       } else {
         // 실제 Supabase Auth 가입
         const { error } = await supabase.auth.signUp({
@@ -112,6 +113,10 @@ export const Signup: React.FC = () => {
         });
 
         if (error) throw error;
+        
+        // 이메일 인증이 꺼져있을 경우 Supabase가 자동 로그인을 시켜버리므로, 
+        // 의도한 로그인 플로우(회원가입 후 수동 로그인)를 위해 바로 강제 로그아웃 처리
+        await supabase.auth.signOut();
       }
 
       setSuccessMsg('회원가입이 완료되었습니다! 로그인 페이지로 이동합니다.');
