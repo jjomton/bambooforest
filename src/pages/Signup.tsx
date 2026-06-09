@@ -127,7 +127,7 @@ export const Signup: React.FC = () => {
 
   return (
     <Layout>
-      <div className="max-w-[400px] mx-auto my-12 bg-white rounded-bamboo-card p-8 shadow-soft border border-bamboo-border/50">
+      <div className="max-w-[400px] mx-auto my-8 sm:my-12 bg-white rounded-bamboo-card p-6 sm:p-8 shadow-soft border border-bamboo-border/50">
         <div className="flex flex-col items-center mb-8">
           <div className="w-12 h-12 bg-blue-50 text-brand-blue rounded-full flex items-center justify-center mb-3">
             <UserPlus className="w-6 h-6" />
