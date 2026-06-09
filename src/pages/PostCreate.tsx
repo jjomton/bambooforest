@@ -4,6 +4,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { supabase, isMockEnabled, mockDb } from '@/lib/supabaseClient';
 import { Layout } from '@/components/Layout';
 import { Trees, AlertCircle, Check } from 'lucide-react';
+import { containsProfanity, getDetectedProfanities } from '@/lib/profanityFilter';
 
 export const PostCreate: React.FC = () => {
   const { user, loading: authLoading } = useAuth();
@@ -37,6 +38,14 @@ export const PostCreate: React.FC = () => {
     }
     if (!content.trim()) {
       setErrorMsg('본문 내용을 입력해 주세요.');
+      return;
+    }
+
+    // 비속어 필터링 검증
+    if (containsProfanity(title) || containsProfanity(content)) {
+      const badWords = [...getDetectedProfanities(title), ...getDetectedProfanities(content)];
+      const uniqueBadWords = Array.from(new Set(badWords));
+      setErrorMsg(`작성 내용에 부적절한 비속어가 포함되어 있어 등록할 수 없습니다. (감지된 단어: ${uniqueBadWords.join(', ')})`);
       return;
     }
 
@@ -79,7 +88,7 @@ export const PostCreate: React.FC = () => {
 
   return (
     <Layout>
-      <div className="max-w-[640px] mx-auto bg-white rounded-bamboo-card p-8 shadow-soft border border-bamboo-border/50">
+      <div className="max-w-[640px] mx-auto bg-white rounded-bamboo-card p-5 sm:p-8 shadow-soft border border-bamboo-border/50">
         <div className="flex items-center gap-3 mb-6 pb-4 border-b border-bamboo-border/40">
           <div className="w-10 h-10 bg-green-50 text-green-600 rounded-full flex items-center justify-center">
             <Trees className="w-5 h-5" />
