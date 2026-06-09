@@ -30,6 +30,17 @@ export const PostDetail: React.FC = () => {
   const [comments, setComments] = useState<CommentItem[]>([]);
   const [newComment, setNewComment] = useState('');
   
+  // 나의 글/댓글 상태
+  const [isAuthor, setIsAuthor] = useState(false);
+  const [myCommentIds, setMyCommentIds] = useState<Set<string>>(new Set());
+  
+  // 수정 모드 상태
+  const [isEditingPost, setIsEditingPost] = useState(false);
+  const [editTitle, setEditTitle] = useState('');
+  const [editContent, setEditContent] = useState('');
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editCommentContent, setEditCommentContent] = useState('');
+  
   // 투표 통계 및 유저 투표 상태
   const [voteStats, setVoteStats] = useState({ totalCount: 0, averageScore: 0, distribution: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 } as Record<number, number> });
   const [userVotedScore, setUserVotedScore] = useState<number | null>(null); // null 이면 미투표
@@ -135,6 +146,27 @@ export const PostDetail: React.FC = () => {
             }
           }
         }
+        
+        // 5. 로그인 유저의 글/댓글 작성자 여부 확인
+        if (user) {
+          const { data: postAuthorData } = await supabase
+            .from('post_authors')
+            .select('post_id')
+            .eq('post_id', id);
+          if (postAuthorData && postAuthorData.length > 0) {
+            setIsAuthor(true);
+            setEditTitle(postData.title);
+            setEditContent(postData.content);
+          }
+
+          const { data: commentAuthorData } = await supabase
+            .from('comment_authors')
+            .select('comment_id');
+          if (commentAuthorData) {
+            const myIds = new Set<string>(commentAuthorData.map((c: any) => c.comment_id));
+            setMyCommentIds(myIds);
+          }
+        }
       }
     } catch (err: any) {
       setError('데이터를 가져오는 중 문제가 발생했습니다: ' + err.message);
@@ -172,6 +204,7 @@ export const PostDetail: React.FC = () => {
         if (insertError) throw insertError;
         if (data) {
           setComments([...comments, data[0]]);
+          setMyCommentIds((prev) => new Set(prev).add(data[0].id));
         }
       }
       setNewComment('');
@@ -189,22 +222,40 @@ export const PostDetail: React.FC = () => {
       navigate('/login');
       return;
     }
-    if (!id || userVotedScore !== null || submittingVote) return;
+    if (!id || submittingVote) return;
 
     setSubmittingVote(true);
     try {
       if (isMockEnabled) {
         await mockDb.vote(id, user.id, score);
+        setUserVotedScore(score);
       } else {
-        // 실제 Supabase 삽입
-        const { error: voteError } = await supabase
-          .from('votes')
-          .insert([{ post_id: id, user_id: user.id, score }]);
-
-        if (voteError) throw voteError;
+        // 실제 Supabase 삽입/수정/삭제
+        if (userVotedScore === score) {
+          // 투표 취소
+          const { error: deleteError } = await supabase
+            .from('votes')
+            .delete()
+            .match({ post_id: id, user_id: user.id });
+          if (deleteError) throw deleteError;
+          setUserVotedScore(null);
+        } else if (userVotedScore !== null) {
+          // 투표 점수 변경
+          const { error: updateError } = await supabase
+            .from('votes')
+            .update({ score })
+            .match({ post_id: id, user_id: user.id });
+          if (updateError) throw updateError;
+          setUserVotedScore(score);
+        } else {
+          // 새 투표
+          const { error: voteError } = await supabase
+            .from('votes')
+            .insert([{ post_id: id, user_id: user.id, score }]);
+          if (voteError) throw voteError;
+          setUserVotedScore(score);
+        }
       }
-
-      setUserVotedScore(score);
       
       // 투표 통계 강제 리로드
       if (isMockEnabled) {
@@ -231,7 +282,10 @@ export const PostDetail: React.FC = () => {
           setVoteStats({ totalCount, averageScore, distribution });
         }
       }
-      alert('투표해 주셔서 감사합니다!');
+
+      if (userVotedScore === score) alert('투표가 취소되었습니다.');
+      else if (userVotedScore !== null) alert('투표 점수가 변경되었습니다.');
+      else alert('투표해 주셔서 감사합니다!');
     } catch (err: any) {
       alert('투표 반영 실패: ' + err.message);
     } finally {
@@ -274,6 +328,58 @@ export const PostDetail: React.FC = () => {
       alert('상태 저장 실패: ' + err.message);
     } finally {
       setSubmittingAdmin(false);
+    }
+  };
+
+  // 게시글 수정/삭제 핸들러
+  const handleDeletePost = async () => {
+    if (!window.confirm('정말 이 게시글을 삭제하시겠습니까? 관련 댓글과 투표도 모두 삭제됩니다.')) return;
+    try {
+      const { error } = await supabase.from('posts').delete().eq('id', id);
+      if (error) throw error;
+      alert('삭제되었습니다.');
+      navigate('/board');
+    } catch (err: any) {
+      alert('게시글 삭제 실패: ' + err.message);
+    }
+  };
+
+  const handleEditPostSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editTitle.trim() || !editContent.trim()) return;
+    try {
+      const { error } = await supabase.from('posts').update({ title: editTitle, content: editContent }).eq('id', id);
+      if (error) throw error;
+      setPost(prev => prev ? { ...prev, title: editTitle, content: editContent } : null);
+      setIsEditingPost(false);
+    } catch (err: any) {
+      alert('게시글 수정 실패: ' + err.message);
+    }
+  };
+
+  // 댓글 수정/삭제 핸들러
+  const handleDeleteComment = async (commentId: string) => {
+    if (!window.confirm('이 댓글을 삭제하시겠습니까?')) return;
+    try {
+      const { error } = await supabase.from('comments').delete().eq('id', commentId);
+      if (error) throw error;
+      setComments(prev => prev.filter(c => c.id !== commentId));
+    } catch (err: any) {
+      alert('댓글 삭제 실패: ' + err.message);
+    }
+  };
+
+  const handleEditCommentSubmit = async (e: React.FormEvent, commentId: string) => {
+    e.preventDefault();
+    if (!editCommentContent.trim()) return;
+    try {
+      const { error } = await supabase.from('comments').update({ content: editCommentContent }).eq('id', commentId);
+      if (error) throw error;
+      setComments(prev => prev.map(c => c.id === commentId ? { ...c, content: editCommentContent } : c));
+      setEditingCommentId(null);
+      setEditCommentContent('');
+    } catch (err: any) {
+      alert('댓글 수정 실패: ' + err.message);
     }
   };
 
@@ -352,18 +458,66 @@ export const PostDetail: React.FC = () => {
             </div>
           </div>
 
-          <h1 className="text-lg sm:text-xl font-bold text-bamboo-text-main mb-4 leading-tight">
-            {post.title}
-          </h1>
+          {isEditingPost ? (
+            <form onSubmit={handleEditPostSubmit} className="mb-6 space-y-4">
+              <input
+                type="text"
+                required
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                className="w-full px-4 py-2.5 text-lg sm:text-xl font-bold text-bamboo-text-main bg-gray-50 border border-transparent rounded-bamboo-input focus:bg-white focus:border-brand-blue outline-none transition-all"
+              />
+              <textarea
+                required
+                rows={8}
+                value={editContent}
+                onChange={(e) => setEditContent(e.target.value)}
+                className="w-full px-4 py-3 text-sm sm:text-base text-bamboo-text-main bg-gray-50 border border-transparent rounded-bamboo-input focus:bg-white focus:border-brand-blue outline-none transition-all resize-none"
+              />
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsEditingPost(false)}
+                  className="px-4 py-2 text-sm font-semibold text-bamboo-text-muted hover:text-bamboo-text-main transition-colors"
+                >
+                  취소
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-brand-blue hover:bg-brand-blue-hover text-white text-sm font-bold rounded-bamboo-input shadow-soft transition-colors"
+                >
+                  수정 완료
+                </button>
+              </div>
+            </form>
+          ) : (
+            <>
+              <h1 className="text-lg sm:text-xl font-bold text-bamboo-text-main mb-4 leading-tight">
+                {post.title}
+              </h1>
 
-          <p className="text-sm sm:text-base text-bamboo-text-muted/95 leading-relaxed whitespace-pre-wrap pb-6 border-b border-bamboo-border/40">
-            {post.content}
-          </p>
+              <p className="text-sm sm:text-base text-bamboo-text-muted/95 leading-relaxed whitespace-pre-wrap pb-6 border-b border-bamboo-border/40">
+                {post.content}
+              </p>
+            </>
+          )}
 
           <div className="flex items-center justify-between pt-4 text-xs text-bamboo-text-muted">
-            <span className="font-semibold text-bamboo-text-muted/80 bg-gray-100 px-2.5 py-1 rounded">
-              익명 대나무
-            </span>
+            <div className="flex items-center gap-3">
+              <span className="font-semibold text-bamboo-text-muted/80 bg-gray-100 px-2.5 py-1 rounded">
+                익명 대나무
+              </span>
+              {isAuthor && !isEditingPost && (
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setIsEditingPost(true)} className="px-3 py-1 text-xs font-bold text-bamboo-text-main bg-white hover:bg-brand-blue hover:text-white border border-bamboo-border shadow-sm rounded transition-colors">
+                    수정
+                  </button>
+                  <button onClick={handleDeletePost} className="px-3 py-1 text-xs font-bold text-status-rejected-text bg-white hover:bg-status-rejected border border-status-rejected-text/30 shadow-sm rounded transition-colors">
+                    삭제
+                  </button>
+                </div>
+              )}
+            </div>
             <div className="flex items-center gap-4">
               <span className="flex items-center gap-1">
                 <ThumbsUp className="w-3.5 h-3.5 text-brand-blue" />
@@ -409,18 +563,15 @@ export const PostDetail: React.FC = () => {
           <div className="flex items-center gap-2 mb-4">
             {[1, 2, 3, 4, 5].map((score) => {
               const isSelected = userVotedScore === score;
-              const hasVotedAny = userVotedScore !== null;
               
               return (
                 <button
                   key={score}
                   onClick={() => handleVote(score)}
-                  disabled={hasVotedAny || submittingVote}
+                  disabled={submittingVote}
                   className={`flex-1 flex flex-col items-center justify-center py-2.5 rounded-bamboo-input font-bold transition-all ${
                     isSelected
                       ? 'bg-brand-blue text-white shadow-soft scale-105'
-                      : hasVotedAny
-                      ? 'bg-gray-100 text-gray-300 cursor-not-allowed'
                       : 'bg-gray-50 text-bamboo-text-muted hover:bg-brand-blue/10 hover:text-brand-blue border border-transparent hover:border-brand-blue/30'
                   }`}
                 >
@@ -434,8 +585,8 @@ export const PostDetail: React.FC = () => {
           </div>
 
           {userVotedScore !== null && (
-            <div className="bg-blue-50 text-brand-blue px-3 py-2 rounded-bamboo-input text-xs font-semibold text-center">
-              🎉 이미 {userVotedScore}점으로 공감 투표에 참여하셨습니다. (중복 투표 차단됨)
+            <div className="bg-blue-50 text-brand-blue px-3 py-2 rounded-bamboo-input text-xs font-semibold text-center shadow-sm border border-blue-100">
+              🎉 이미 {userVotedScore}점으로 공감 투표에 참여하셨습니다. (같은 점수를 누르면 취소됩니다)
             </div>
           )}
 
@@ -522,7 +673,19 @@ export const PostDetail: React.FC = () => {
                 <div key={comment.id} className="flex items-start gap-2 text-sm bg-gray-50/50 p-4 rounded-bamboo-card border border-bamboo-border/20">
                   <div className="flex-1">
                     <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-xs font-bold text-bamboo-text-muted">익명 대나무</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-bamboo-text-muted">익명 대나무</span>
+                        {myCommentIds.has(comment.id) && (
+                          <div className="flex items-center gap-1.5 pl-2 ml-1 border-l border-bamboo-border">
+                            <button onClick={() => { setEditingCommentId(comment.id); setEditCommentContent(comment.content); }} className="px-1.5 py-0.5 text-[10px] font-bold bg-gray-100 hover:bg-brand-blue hover:text-white text-bamboo-text-muted rounded transition-colors border border-gray-200 shadow-sm">
+                              수정
+                            </button>
+                            <button onClick={() => handleDeleteComment(comment.id)} className="px-1.5 py-0.5 text-[10px] font-bold bg-gray-100 hover:bg-status-rejected text-status-rejected-text rounded transition-colors border border-status-rejected-text/30 shadow-sm">
+                              삭제
+                            </button>
+                          </div>
+                        )}
+                      </div>
                       <span className="text-[10px] text-bamboo-text-muted/60">
                         {new Date(comment.created_at).toLocaleDateString('ko-KR', {
                           month: 'numeric',
@@ -532,9 +695,25 @@ export const PostDetail: React.FC = () => {
                         })}
                       </span>
                     </div>
-                    <p className="text-bamboo-text-main text-xs sm:text-sm leading-relaxed whitespace-pre-wrap">
-                      {comment.content}
-                    </p>
+                    {editingCommentId === comment.id ? (
+                      <form onSubmit={(e) => handleEditCommentSubmit(e, comment.id)} className="mt-2 space-y-2">
+                        <textarea
+                          required
+                          rows={2}
+                          value={editCommentContent}
+                          onChange={(e) => setEditCommentContent(e.target.value)}
+                          className="w-full px-3 py-2 text-xs bg-white border border-bamboo-border rounded focus:border-brand-blue outline-none resize-none transition-all"
+                        />
+                        <div className="flex justify-end gap-2">
+                          <button type="button" onClick={() => setEditingCommentId(null)} className="text-xs text-bamboo-text-muted hover:text-bamboo-text-main font-semibold">취소</button>
+                          <button type="submit" className="text-xs text-brand-blue hover:text-brand-blue-hover font-bold">완료</button>
+                        </div>
+                      </form>
+                    ) : (
+                      <p className="text-bamboo-text-main text-xs sm:text-sm leading-relaxed whitespace-pre-wrap">
+                        {comment.content}
+                      </p>
+                    )}
                   </div>
                 </div>
               ))}
