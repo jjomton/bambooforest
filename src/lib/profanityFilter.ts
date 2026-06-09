@@ -22,7 +22,8 @@ const PROFANITY_WORDS = [
 export const containsProfanity = (text: string): boolean => {
   if (!text) return false;
   
-  const cleanedText = text.replace(/\s+/g, '').toLowerCase();
+  // 공백 및 특수문자(-, ~, * 등)를 무시하고 텍스트만 추출하여 감지력을 높임
+  const cleanedText = text.replace(/[^a-zA-Z0-9가-힣ㄱ-ㅎㅏ-ㅣ]/g, '').toLowerCase();
   
   return PROFANITY_WORDS.some((word) => cleanedText.includes(word));
 };
@@ -33,7 +34,8 @@ export const containsProfanity = (text: string): boolean => {
 export const getDetectedProfanities = (text: string): string[] => {
   if (!text) return [];
   
-  const cleanedText = text.replace(/\s+/g, '').toLowerCase();
+  // 공백 및 특수문자(-, ~, * 등)를 무시하고 텍스트만 추출하여 감지력을 높임
+  const cleanedText = text.replace(/[^a-zA-Z0-9가-힣ㄱ-ㅎㅏ-ㅣ]/g, '').toLowerCase();
   
   return PROFANITY_WORDS.filter((word) => cleanedText.includes(word));
 };
