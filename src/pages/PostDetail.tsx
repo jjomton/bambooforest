@@ -266,7 +266,11 @@ export const PostDetail: React.FC = () => {
       alert('신고가 성공적으로 접수되었습니다. (동일 게시물 누적 3회 신고 시 자동 블라인드 처리)');
       loadAllData(); // 화면 갱신
     } catch (err: any) {
-      alert('신고 처리 실패: ' + err.message);
+      if (err.code === '23505') {
+        alert('이미 이 게시글을 신고하셨습니다. (중복 신고 불가)');
+      } else {
+        alert('신고 처리 실패: ' + err.message);
+      }
     } finally {
       setSubmittingReport(false);
     }
@@ -297,7 +301,11 @@ export const PostDetail: React.FC = () => {
       alert('댓글 신고가 접수되었습니다. (동일 댓글 누적 3회 신고 시 자동 블라인드 처리)');
       loadAllData(); // 화면 갱신
     } catch (err: any) {
-      alert('신고 처리 실패: ' + err.message);
+      if (err.code === '23505') {
+        alert('이미 이 댓글을 신고하셨습니다. (중복 신고 불가)');
+      } else {
+        alert('신고 처리 실패: ' + err.message);
+      }
     } finally {
       setSubmittingReport(false);
     }
