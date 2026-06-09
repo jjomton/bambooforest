@@ -22,6 +22,7 @@ CREATE TABLE public.posts (
 CREATE TABLE public.comments (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   post_id UUID REFERENCES public.posts(id) ON DELETE CASCADE NOT NULL,
+  parent_id UUID REFERENCES public.comments(id) ON DELETE CASCADE,
   content TEXT NOT NULL,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
   -- 익명 보장을 위해 작성자 ID(user_id)를 직접 저장하지 않음.

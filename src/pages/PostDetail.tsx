@@ -18,6 +18,7 @@ interface CommentItem {
   id: string;
   content: string;
   created_at: string;
+  parent_id?: string | null;
 }
 
 export const PostDetail: React.FC = () => {
@@ -40,6 +41,10 @@ export const PostDetail: React.FC = () => {
   const [editContent, setEditContent] = useState('');
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editCommentContent, setEditCommentContent] = useState('');
+  
+  // 답글 모드 상태
+  const [replyingToId, setReplyingToId] = useState<string | null>(null);
+  const [replyContent, setReplyContent] = useState('');
   
   // 투표 통계 및 유저 투표 상태
   const [voteStats, setVoteStats] = useState({ totalCount: 0, averageScore: 0, distribution: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 } as Record<number, number> });
@@ -179,26 +184,29 @@ export const PostDetail: React.FC = () => {
     loadAllData();
   }, [id, user]);
 
-  // 댓글 등록
-  const handleCommentSubmit = async (e: React.FormEvent) => {
+  // 댓글 작성 처리 (대댓글 포함)
+  const handleCommentSubmit = async (e: React.FormEvent, parentId: string | null = null) => {
     e.preventDefault();
     if (!user) {
-      alert('댓글을 작성하려면 먼저 로그인해 주세요.');
+      alert('댓글 작성을 위해 로그인이 필요합니다.');
       navigate('/login');
       return;
     }
-    if (!newComment.trim() || !id) return;
+
+    const contentToSubmit = parentId ? replyContent : newComment;
+    if (!id || !contentToSubmit.trim() || submittingComment) return;
 
     setSubmittingComment(true);
     try {
       if (isMockEnabled) {
-        const comment = await mockDb.createComment(id, newComment);
-        setComments([...comments, comment]);
+        const added = await mockDb.createComment(id, contentToSubmit, parentId);
+        setComments([...comments, added as CommentItem]);
+        setMyCommentIds((prev) => new Set(prev).add(added.id));
       } else {
         // 실제 댓글 삽입 (작성자 식별을 저장하지 않음)
         const { data, error: insertError } = await supabase
           .from('comments')
-          .insert([{ post_id: id, content: newComment }])
+          .insert([{ post_id: id, content: contentToSubmit, parent_id: parentId }])
           .select();
 
         if (insertError) throw insertError;
@@ -206,8 +214,14 @@ export const PostDetail: React.FC = () => {
           setComments([...comments, data[0]]);
           setMyCommentIds((prev) => new Set(prev).add(data[0].id));
         }
+      } // <- 이 중괄호가 빠져있었음
+      
+      if (parentId) {
+        setReplyContent('');
+        setReplyingToId(null);
+      } else {
+        setNewComment('');
       }
-      setNewComment('');
     } catch (err: any) {
       alert('댓글 등록 실패: ' + err.message);
     } finally {
@@ -669,50 +683,114 @@ export const PostDetail: React.FC = () => {
             </div>
           ) : (
             <div className="space-y-4 mb-6 pb-6 border-b border-bamboo-border/30">
-              {comments.map((comment) => (
-                <div key={comment.id} className="flex items-start gap-2 text-sm bg-gray-50/50 p-4 rounded-bamboo-card border border-bamboo-border/20">
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-bamboo-text-muted">익명 대나무</span>
-                        {myCommentIds.has(comment.id) && (
+              {comments.filter(c => !c.parent_id).map((comment) => (
+                <div key={comment.id} className="space-y-3">
+                  {/* 원본(부모) 댓글 */}
+                  <div className="flex items-start gap-2 text-sm bg-gray-50/50 p-4 rounded-bamboo-card border border-bamboo-border/20">
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-bamboo-text-muted">익명 대나무</span>
                           <div className="flex items-center gap-1.5 pl-2 ml-1 border-l border-bamboo-border">
-                            <button onClick={() => { setEditingCommentId(comment.id); setEditCommentContent(comment.content); }} className="px-1.5 py-0.5 text-[10px] font-bold bg-gray-100 hover:bg-brand-blue hover:text-white text-bamboo-text-muted rounded transition-colors border border-gray-200 shadow-sm">
-                              수정
-                            </button>
-                            <button onClick={() => handleDeleteComment(comment.id)} className="px-1.5 py-0.5 text-[10px] font-bold bg-gray-100 hover:bg-status-rejected text-status-rejected-text rounded transition-colors border border-status-rejected-text/30 shadow-sm">
-                              삭제
+                            {myCommentIds.has(comment.id) && (
+                              <>
+                                <button onClick={() => { setEditingCommentId(comment.id); setEditCommentContent(comment.content); }} className="px-1.5 py-0.5 text-[10px] font-bold bg-gray-100 hover:bg-brand-blue hover:text-white text-bamboo-text-muted rounded transition-colors border border-gray-200 shadow-sm">
+                                  수정
+                                </button>
+                                <button onClick={() => handleDeleteComment(comment.id)} className="px-1.5 py-0.5 text-[10px] font-bold bg-gray-100 hover:bg-status-rejected text-status-rejected-text rounded transition-colors border border-status-rejected-text/30 shadow-sm">
+                                  삭제
+                                </button>
+                              </>
+                            )}
+                            <button onClick={() => setReplyingToId(replyingToId === comment.id ? null : comment.id)} className="px-1.5 py-0.5 text-[10px] font-bold bg-gray-100 hover:bg-brand-blue hover:text-white text-bamboo-text-muted rounded transition-colors border border-gray-200 shadow-sm">
+                              답글
                             </button>
                           </div>
-                        )}
+                        </div>
+                        <span className="text-[10px] text-bamboo-text-muted/60">
+                          {new Date(comment.created_at).toLocaleDateString('ko-KR', {
+                            month: 'numeric',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </span>
                       </div>
-                      <span className="text-[10px] text-bamboo-text-muted/60">
-                        {new Date(comment.created_at).toLocaleDateString('ko-KR', {
-                          month: 'numeric',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </span>
+                      {editingCommentId === comment.id ? (
+                        <form onSubmit={(e) => handleEditCommentSubmit(e, comment.id)} className="mt-2 space-y-2">
+                          <textarea
+                            required
+                            rows={2}
+                            value={editCommentContent}
+                            onChange={(e) => setEditCommentContent(e.target.value)}
+                            className="w-full px-3 py-2 text-xs bg-white border border-bamboo-border rounded focus:border-brand-blue outline-none resize-none transition-all"
+                          />
+                          <div className="flex justify-end gap-2">
+                            <button type="button" onClick={() => setEditingCommentId(null)} className="text-xs text-bamboo-text-muted hover:text-bamboo-text-main font-semibold">취소</button>
+                            <button type="submit" className="text-xs text-brand-blue hover:text-brand-blue-hover font-bold">완료</button>
+                          </div>
+                        </form>
+                      ) : (
+                        <p className="text-bamboo-text-main text-xs sm:text-sm leading-relaxed whitespace-pre-wrap">
+                          {comment.content}
+                        </p>
+                      )}
                     </div>
-                    {editingCommentId === comment.id ? (
-                      <form onSubmit={(e) => handleEditCommentSubmit(e, comment.id)} className="mt-2 space-y-2">
+                  </div>
+
+                  {/* 대댓글 및 답글 폼 영역 */}
+                  <div className="pl-6 sm:pl-8 space-y-3">
+                    {comments.filter(reply => reply.parent_id === comment.id).map(reply => (
+                      <div key={reply.id} className="flex items-start gap-2 text-sm bg-gray-50/80 p-3 rounded-bamboo-card border border-bamboo-border/10 relative">
+                        <CornerDownRight className="w-4 h-4 text-bamboo-text-muted/40 absolute -left-5 sm:-left-7 top-3" />
+                        <div className="flex-1">
+                          <div className="flex items-center justify-between mb-1.5">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold text-bamboo-text-muted">익명 대나무</span>
+                              {myCommentIds.has(reply.id) && (
+                                <div className="flex items-center gap-1.5 pl-2 ml-1 border-l border-bamboo-border">
+                                  <button onClick={() => { setEditingCommentId(reply.id); setEditCommentContent(reply.content); }} className="px-1.5 py-0.5 text-[10px] font-bold bg-gray-100 hover:bg-brand-blue hover:text-white text-bamboo-text-muted rounded transition-colors border border-gray-200 shadow-sm">수정</button>
+                                  <button onClick={() => handleDeleteComment(reply.id)} className="px-1.5 py-0.5 text-[10px] font-bold bg-gray-100 hover:bg-status-rejected text-status-rejected-text rounded transition-colors border border-status-rejected-text/30 shadow-sm">삭제</button>
+                                </div>
+                              )}
+                            </div>
+                            <span className="text-[10px] text-bamboo-text-muted/60">
+                              {new Date(reply.created_at).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </div>
+                          {editingCommentId === reply.id ? (
+                            <form onSubmit={(e) => handleEditCommentSubmit(e, reply.id)} className="mt-2 space-y-2">
+                              <textarea required rows={2} value={editCommentContent} onChange={(e) => setEditCommentContent(e.target.value)} className="w-full px-3 py-2 text-xs bg-white border border-bamboo-border rounded focus:border-brand-blue outline-none resize-none transition-all" />
+                              <div className="flex justify-end gap-2">
+                                <button type="button" onClick={() => setEditingCommentId(null)} className="text-xs text-bamboo-text-muted hover:text-bamboo-text-main font-semibold">취소</button>
+                                <button type="submit" className="text-xs text-brand-blue hover:text-brand-blue-hover font-bold">완료</button>
+                              </div>
+                            </form>
+                          ) : (
+                            <p className="text-bamboo-text-main text-xs sm:text-sm leading-relaxed whitespace-pre-wrap">{reply.content}</p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+
+                    {replyingToId === comment.id && (
+                      <form onSubmit={(e) => handleCommentSubmit(e, comment.id)} className="flex flex-col gap-2 relative mt-2">
+                        <CornerDownRight className="w-4 h-4 text-bamboo-text-muted/40 absolute -left-5 sm:-left-7 top-3" />
                         <textarea
                           required
                           rows={2}
-                          value={editCommentContent}
-                          onChange={(e) => setEditCommentContent(e.target.value)}
-                          className="w-full px-3 py-2 text-xs bg-white border border-bamboo-border rounded focus:border-brand-blue outline-none resize-none transition-all"
+                          placeholder="답글을 입력하세요 (익명 보장)"
+                          value={replyContent}
+                          onChange={(e) => setReplyContent(e.target.value)}
+                          className="w-full px-3 py-2 text-xs sm:text-sm bg-white border border-brand-blue/30 rounded focus:bg-white focus:border-brand-blue outline-none transition-all resize-none shadow-sm"
                         />
                         <div className="flex justify-end gap-2">
-                          <button type="button" onClick={() => setEditingCommentId(null)} className="text-xs text-bamboo-text-muted hover:text-bamboo-text-main font-semibold">취소</button>
-                          <button type="submit" className="text-xs text-brand-blue hover:text-brand-blue-hover font-bold">완료</button>
+                          <button type="button" onClick={() => setReplyingToId(null)} className="px-3 py-1.5 text-xs font-semibold text-bamboo-text-muted hover:text-bamboo-text-main transition-colors">취소</button>
+                          <button type="submit" disabled={submittingComment || !replyContent.trim()} className="px-3 py-1.5 text-xs font-bold bg-brand-blue hover:bg-brand-blue-hover text-white rounded shadow-soft transition-colors disabled:opacity-50">
+                            {submittingComment ? '등록 중...' : '답글 달기'}
+                          </button>
                         </div>
                       </form>
-                    ) : (
-                      <p className="text-bamboo-text-main text-xs sm:text-sm leading-relaxed whitespace-pre-wrap">
-                        {comment.content}
-                      </p>
                     )}
                   </div>
                 </div>
