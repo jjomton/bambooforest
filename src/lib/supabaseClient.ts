@@ -54,6 +54,7 @@ export interface MockPost {
 export interface MockComment {
   id: string;
   post_id: string;
+  parent_id?: string | null;
   content: string;
   created_at: string;
 }
@@ -121,20 +122,30 @@ if (isMockEnabled) {
       {
         id: 'c-1',
         post_id: 'post-1',
+        parent_id: null,
         content: '맞아요, 가디건 입어도 춥더라구요 ㅠㅠ 빠른 조치 감사드립니다!',
         created_at: new Date(Date.now() - 1000 * 60 * 30).toISOString(),
       },
       {
         id: 'c-2',
         post_id: 'post-1',
+        parent_id: null,
         content: '바람막이 신의 한 수네요!',
         created_at: new Date(Date.now() - 1000 * 60 * 10).toISOString(),
       },
       {
         id: 'c-3',
         post_id: 'post-2',
+        parent_id: null,
         content: '2층 빈 회의실도 낮시간엔 비어있던데 좋은 생각인 것 같아요.',
         created_at: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
+      },
+      {
+        id: 'c-4',
+        post_id: 'post-1',
+        parent_id: 'c-1',
+        content: '저도 가디건 필수라고 생각했어요!!',
+        created_at: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
       },
     ]);
   }
@@ -253,11 +264,12 @@ export const mockDb = {
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
   },
 
-  createComment: async (postId: string, content: string) => {
+  createComment: async (postId: string, content: string, parentId?: string | null) => {
     const comments = getLocalStorage<MockComment[]>('bf_comments', []);
     const newComment: MockComment = {
       id: Math.random().toString(36).substring(2, 11),
       post_id: postId,
+      parent_id: parentId || null,
       content,
       created_at: new Date().toISOString(),
     };
