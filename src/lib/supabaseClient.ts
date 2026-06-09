@@ -163,6 +163,7 @@ if (isMockEnabled) {
         post_id: 'post-1',
         parent_id: 'c-1',
         content: '저도 가디건 필수라고 생각했어요!!',
+        is_blinded: false,
         created_at: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
       },
     ]);
