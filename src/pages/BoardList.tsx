@@ -282,7 +282,7 @@ export const BoardList: React.FC = () => {
               <Link
                 key={post.id}
                 to={`/board/${post.id}`}
-                className="block bg-white rounded-bamboo-card p-6 border border-bamboo-border/30 hover:border-brand-blue/30 shadow-soft transition-all duration-200"
+                className="block bg-white rounded-bamboo-card p-5 sm:p-6 border border-bamboo-border/30 hover:border-brand-blue/30 shadow-soft transition-all duration-200"
               >
                 <div className="flex items-center justify-between gap-4 mb-3">
                   <div className="flex items-center gap-2">
@@ -293,7 +293,7 @@ export const BoardList: React.FC = () => {
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-1.5 text-xs text-bamboo-text-muted/70">
+                  <div className="flex items-center gap-1.5 text-[10px] sm:text-xs text-bamboo-text-muted/70">
                     <Calendar className="w-3.5 h-3.5" />
                     <span>{new Date(post.created_at).toLocaleDateString('ko-KR', {
                       year: 'numeric',
@@ -305,28 +305,28 @@ export const BoardList: React.FC = () => {
                   </div>
                 </div>
 
-                <h3 className="text-base font-bold text-bamboo-text-main mb-2 line-clamp-1 hover:text-brand-blue transition-colors">
+                <h3 className="text-sm sm:text-base font-bold text-bamboo-text-main mb-2 line-clamp-1 hover:text-brand-blue transition-colors">
                   {post.title}
                 </h3>
                 
-                <p className="text-sm text-bamboo-text-muted/95 leading-relaxed line-clamp-2 mb-4">
+                <p className="text-xs sm:text-sm text-bamboo-text-muted/95 leading-relaxed line-clamp-2 mb-4">
                   {post.content}
                 </p>
 
-                <div className="flex items-center justify-between border-t border-bamboo-border/40 pt-4 text-xs text-bamboo-text-muted">
+                <div className="flex items-center justify-between border-t border-bamboo-border/40 pt-4 text-[10px] sm:text-xs text-bamboo-text-muted">
                   <span className="font-semibold text-bamboo-text-muted/80 bg-gray-100 px-2 py-0.5 rounded">
                     익명 대나무
                   </span>
                   
-                  <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-3 sm:gap-4">
                     <span className="flex items-center gap-1.5">
                       <ThumbsUp className="w-3.5 h-3.5 text-brand-blue/70" />
-                      공감 <strong className="text-brand-blue">{post.averageScore}</strong>
-                      <span className="text-[10px] text-bamboo-text-muted/60">({post.totalVotes}명)</span>
+                      공감 <strong className="text-brand-blue font-bold">{post.averageScore}</strong>
+                      <span className="text-[9px] sm:text-[10px] text-bamboo-text-muted/60">({post.totalVotes}명)</span>
                     </span>
                     <span className="flex items-center gap-1.5">
                       <MessageSquare className="w-3.5 h-3.5 text-bamboo-text-muted/70" />
-                      댓글 <strong className="text-bamboo-text-main">{post.commentCount}</strong>
+                      댓글 <strong className="text-bamboo-text-main font-bold">{post.commentCount}</strong>
                     </span>
                   </div>
                 </div>
@@ -336,20 +336,20 @@ export const BoardList: React.FC = () => {
 
           {/* 페이지네이션 컨트롤 */}
           {totalPages > 1 && (
-            <div className="flex items-center justify-center gap-1.5 mt-8">
+            <div className="flex items-center justify-center gap-1 mt-8">
               <button
                 onClick={() => paginate(currentPage - 1)}
                 disabled={currentPage === 1}
-                className="p-2 bg-white border border-bamboo-border/50 text-bamboo-text-muted rounded-bamboo-input hover:bg-gray-50 disabled:opacity-40 transition-colors"
+                className="p-1.5 sm:p-2 bg-white border border-bamboo-border/50 text-bamboo-text-muted rounded-bamboo-input hover:bg-gray-50 disabled:opacity-40 transition-colors"
               >
-                <ChevronLeft className="w-4 h-4" />
+                <ChevronLeft className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               </button>
 
               {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
                 <button
                   key={page}
                   onClick={() => paginate(page)}
-                  className={`w-9 h-9 text-xs font-bold rounded-bamboo-input transition-colors ${
+                  className={`w-8 h-8 sm:w-9 sm:h-9 text-[11px] sm:text-xs font-bold rounded-bamboo-input transition-colors ${
                     currentPage === page
                       ? 'bg-brand-blue text-white shadow-soft'
                       : 'bg-white border border-bamboo-border/50 text-bamboo-text-muted hover:bg-gray-50'
@@ -362,9 +362,9 @@ export const BoardList: React.FC = () => {
               <button
                 onClick={() => paginate(currentPage + 1)}
                 disabled={currentPage === totalPages}
-                className="p-2 bg-white border border-bamboo-border/50 text-bamboo-text-muted rounded-bamboo-input hover:bg-gray-50 disabled:opacity-40 transition-colors"
+                className="p-1.5 sm:p-2 bg-white border border-bamboo-border/50 text-bamboo-text-muted rounded-bamboo-input hover:bg-gray-50 disabled:opacity-40 transition-colors"
               >
-                <ChevronRight className="w-4 h-4" />
+                <ChevronRight className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               </button>
             </div>
           )}

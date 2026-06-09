@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase, isMockEnabled, mockDb } from '@/lib/supabaseClient';
 import { Layout } from '@/components/Layout';
-import { ShieldAlert, BarChart3, AlertCircle, CheckCircle, XCircle, FileText, Star, ChevronRight, RefreshCw } from 'lucide-react';
+import { ShieldAlert, BarChart3, AlertCircle, CheckCircle, XCircle, FileText, Star, ChevronRight, RefreshCw, Eye, EyeOff, Flag, MessageSquare } from 'lucide-react';
 
 interface AdminStats {
   totalPosts: number;
@@ -26,6 +26,7 @@ interface AdminPostItem {
   id: string;
   title: string;
   status: 'pending' | 'accepted' | 'rejected';
+  is_blinded: boolean;
   created_at: string;
   averageScore?: number;
   totalVotes?: number;
@@ -38,7 +39,9 @@ export const AdminDashboard: React.FC = () => {
   // 대시보드 상태
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [posts, setPosts] = useState<AdminPostItem[]>([]);
-  const [activeTab, setActiveTab] = useState<'all' | 'pending' | 'accepted' | 'rejected'>('all');
+  const [reportedPosts, setReportedPosts] = useState<any[]>([]);
+  const [reportedComments, setReportedComments] = useState<any[]>([]);
+  const [activeTab, setActiveTab] = useState<'all' | 'pending' | 'accepted' | 'rejected' | 'reports'>('all');
   
   // UI 상태
   const [loading, setLoading] = useState(true);
@@ -53,8 +56,8 @@ export const AdminDashboard: React.FC = () => {
         const statData = await mockDb.getStats();
         setStats(statData);
 
-        // 2. 전체 게시글 데이터 (필터용)
-        const allPosts = await mockDb.getPosts();
+        // 2. 전체 게시글 데이터 (필터용, 블라인드 포함)
+        const allPosts = await mockDb.getPosts('', true);
         
         // 투표 수 매핑
         const enriched = await Promise.all(
@@ -68,6 +71,11 @@ export const AdminDashboard: React.FC = () => {
           })
         );
         setPosts(enriched);
+
+        // 3. 신고 정보 패치
+        const reportedItems = await mockDb.getReportedItems();
+        setReportedPosts(reportedItems.reportedPosts);
+        setReportedComments(reportedItems.reportedComments);
       } else {
         // 실제 Supabase 모드
         // 1. 전체 게시글 조회
@@ -136,6 +144,37 @@ export const AdminDashboard: React.FC = () => {
             rejectedPosts,
             topPosts,
           });
+
+          // 4. 신고/블라인드 내역 조회 (Supabase fallback)
+          const { data: reportsList, error: repError } = await supabase
+            .from('reports')
+            .select('*');
+
+          if (!repError && reportsList) {
+            const repPosts = enriched.map(post => {
+              const postReports = reportsList.filter(r => r.post_id === post.id);
+              return {
+                ...post,
+                reports: postReports,
+                reportCount: postReports.length
+              };
+            }).filter(p => p.reportCount > 0 || p.is_blinded);
+
+            const { data: commentsList } = await supabase.from('comments').select('*');
+            const repComments = (commentsList || []).map(comment => {
+              const commentReports = reportsList.filter(r => r.comment_id === comment.id);
+              const parentPost = enriched.find(p => p.id === comment.post_id);
+              return {
+                ...comment,
+                post_title: parentPost ? parentPost.title : '삭제된 게시글',
+                reports: commentReports,
+                reportCount: commentReports.length
+              };
+            }).filter(c => c.reportCount > 0 || c.is_blinded);
+
+            setReportedPosts(repPosts);
+            setReportedComments(repComments);
+          }
         }
       }
     } catch (err: any) {
@@ -143,6 +182,67 @@ export const AdminDashboard: React.FC = () => {
     } finally {
       setLoading(false);
       setRefreshing(false);
+    }
+  };
+
+  // 블라인드 제어 핸들러
+  const handleTogglePostBlind = async (postId: string, currentBlindStatus: boolean) => {
+    const nextStatus = !currentBlindStatus;
+    const confirmMsg = nextStatus 
+      ? '이 게시글을 블라인드 처리하시겠습니까? 일반 사용자 피드에서 숨겨집니다.' 
+      : '이 게시글의 블라인드를 해제하시겠습니까? 누적 신고 내역도 초기화됩니다.';
+
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      if (isMockEnabled) {
+        await mockDb.updatePostBlindStatus(postId, nextStatus);
+      } else {
+        const { error: updateErr } = await supabase
+          .from('posts')
+          .update({ is_blinded: nextStatus })
+          .eq('id', postId);
+
+        if (updateErr) throw updateErr;
+
+        if (!nextStatus) {
+          await supabase.from('reports').delete().eq('post_id', postId);
+        }
+      }
+      alert('게시글 상태가 변경되었습니다.');
+      loadDashboardData();
+    } catch (err: any) {
+      alert('상태 변경 실패: ' + err.message);
+    }
+  };
+
+  const handleToggleCommentBlind = async (commentId: string, currentBlindStatus: boolean) => {
+    const nextStatus = !currentBlindStatus;
+    const confirmMsg = nextStatus 
+      ? '이 댓글을 블라인드 처리하시겠습니까? 일반 사용자 화면에서 숨겨집니다.' 
+      : '이 댓글의 블라인드를 해제하시겠습니까? 누적 신고 내역도 초기화됩니다.';
+
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      if (isMockEnabled) {
+        await mockDb.updateCommentBlindStatus(commentId, nextStatus);
+      } else {
+        const { error: updateErr } = await supabase
+          .from('comments')
+          .update({ is_blinded: nextStatus })
+          .eq('id', commentId);
+
+        if (updateErr) throw updateErr;
+
+        if (!nextStatus) {
+          await supabase.from('reports').delete().eq('comment_id', commentId);
+        }
+      }
+      alert('댓글 상태가 변경되었습니다.');
+      loadDashboardData();
+    } catch (err: any) {
+      alert('상태 변경 실패: ' + err.message);
     }
   };
 
@@ -337,23 +437,30 @@ export const AdminDashboard: React.FC = () => {
                     <FileText className="w-4 h-4 text-brand-blue" />
                     건의사항 관리 목록
                   </h2>
-                  <span className="text-xs text-bamboo-text-muted/80 font-medium">총 {filteredPosts.length}건</span>
+                  <span className="text-xs text-bamboo-text-muted/80 font-medium">
+                    총 {activeTab === 'reports' ? reportedPosts.length + reportedComments.length : filteredPosts.length}건
+                  </span>
                 </div>
 
-                {/* 탭 필터 */}
-                <div className="flex border-b border-bamboo-border/40 gap-4 mb-4 text-xs font-bold text-bamboo-text-muted">
-                  {(['all', 'pending', 'accepted', 'rejected'] as const).map((tab) => {
-                    const label = tab === 'all' ? '전체' : tab === 'pending' ? '대기' : tab === 'accepted' ? '수용' : '불수용';
-                    const isActive = activeTab === tab;
+                {/* 탭 필터 (모바일 대비 좌우 스크롤 스크롤바 최적화) */}
+                <div className="flex border-b border-bamboo-border/40 gap-4 mb-4 text-xs font-bold text-bamboo-text-muted overflow-x-auto whitespace-nowrap scrollbar-thin">
+                  {([
+                    { id: 'all', label: '전체' },
+                    { id: 'pending', label: '대기' },
+                    { id: 'accepted', label: '수용' },
+                    { id: 'rejected', label: '불수용' },
+                    { id: 'reports', label: '신고/블라인드 관리' },
+                  ] as const).map((tab) => {
+                    const isActive = activeTab === tab.id;
                     return (
                       <button
-                        key={tab}
-                        onClick={() => setActiveTab(tab)}
-                        className={`pb-2.5 px-1 relative transition-colors ${
+                        key={tab.id}
+                        onClick={() => setActiveTab(tab.id)}
+                        className={`pb-2.5 px-1 relative transition-colors cursor-pointer shrink-0 ${
                           isActive ? 'text-brand-blue' : 'hover:text-bamboo-text-main'
                         }`}
                       >
-                        {label}
+                        {tab.label}
                         {isActive && (
                           <span className="absolute bottom-0 left-0 w-full h-[2px] bg-brand-blue rounded-full"></span>
                         )}
@@ -362,39 +469,160 @@ export const AdminDashboard: React.FC = () => {
                   })}
                 </div>
 
-                {/* 필터된 포스트 목록 */}
-                {filteredPosts.length === 0 ? (
-                  <div className="text-center py-12 text-xs text-bamboo-text-muted/70 italic">
-                    선택하신 상태에 해당하는 건의사항이 없습니다.
+                {/* 필터된 포스트 목록 혹은 신고 관리 목록 */}
+                {activeTab === 'reports' ? (
+                  <div className="space-y-8">
+                    {/* 1. 신고된 게시글 */}
+                    <div>
+                      <h3 className="text-xs font-extrabold text-bamboo-text-muted mb-3 flex items-center gap-1.5 border-b border-bamboo-border/20 pb-1.5">
+                        <FileText className="w-3.5 h-3.5" />
+                        신고된 게시글 ({reportedPosts.length}건)
+                      </h3>
+                      {reportedPosts.length === 0 ? (
+                        <p className="text-xs text-bamboo-text-muted/60 italic py-4 text-center">신고되거나 차단된 게시글이 없습니다.</p>
+                      ) : (
+                        <div className="divide-y divide-bamboo-border/30">
+                          {reportedPosts.map((post) => (
+                            <div key={post.id} className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-1 rounded hover:bg-gray-50/50">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                    post.is_blinded ? 'bg-status-rejected text-status-rejected-text' : 'bg-gray-100 text-gray-600'
+                                  }`}>
+                                    {post.is_blinded ? '블라인드 중' : '정상 노출'}
+                                  </span>
+                                  <span className="text-[10px] text-status-rejected-text font-bold flex items-center gap-0.5">
+                                    <Flag className="w-2.5 h-2.5 fill-current" />
+                                    신고 {post.reportCount}회
+                                  </span>
+                                </div>
+                                <Link to={`/board/${post.id}`} className="text-xs sm:text-sm font-bold text-bamboo-text-main hover:text-brand-blue line-clamp-1 transition-colors">
+                                  {post.title}
+                                </Link>
+                                <p className="text-[11px] text-bamboo-text-muted/80 line-clamp-1 mt-1">{post.content}</p>
+                              </div>
+                              
+                              <div className="shrink-0 flex items-center">
+                                <button
+                                  onClick={() => handleTogglePostBlind(post.id, post.is_blinded)}
+                                  className={`px-3 py-1.5 rounded-bamboo-input text-[11px] font-bold flex items-center gap-1 transition-colors cursor-pointer ${
+                                    post.is_blinded 
+                                      ? 'bg-blue-50 text-brand-blue hover:bg-blue-100'
+                                      : 'bg-status-rejected text-status-rejected-text hover:bg-status-rejected/80'
+                                  }`}
+                                >
+                                  {post.is_blinded ? (
+                                    <>
+                                      <Eye className="w-3 h-3" />
+                                      블라인드 해제
+                                    </>
+                                  ) : (
+                                    <>
+                                      <EyeOff className="w-3 h-3" />
+                                      강제 블라인드
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 2. 신고된 댓글 */}
+                    <div>
+                      <h3 className="text-xs font-extrabold text-bamboo-text-muted mb-3 flex items-center gap-1.5 border-b border-bamboo-border/20 pb-1.5">
+                        <MessageSquare className="w-3.5 h-3.5" />
+                        신고된 댓글 ({reportedComments.length}건)
+                      </h3>
+                      {reportedComments.length === 0 ? (
+                        <p className="text-xs text-bamboo-text-muted/60 italic py-4 text-center">신고되거나 차단된 댓글이 없습니다.</p>
+                      ) : (
+                        <div className="divide-y divide-bamboo-border/30">
+                          {reportedComments.map((comment) => (
+                            <div key={comment.id} className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-1 rounded hover:bg-gray-50/50">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                    comment.is_blinded ? 'bg-status-rejected text-status-rejected-text' : 'bg-gray-100 text-gray-600'
+                                  }`}>
+                                    {comment.is_blinded ? '블라인드 중' : '정상 노출'}
+                                  </span>
+                                  <span className="text-[10px] text-status-rejected-text font-bold flex items-center gap-0.5">
+                                    <Flag className="w-2.5 h-2.5 fill-current" />
+                                    신고 {comment.reportCount}회
+                                  </span>
+                                  <span className="text-[10px] text-bamboo-text-muted/60">
+                                    글제목: <strong className="text-bamboo-text-muted font-bold">{comment.post_title}</strong>
+                                  </span>
+                                </div>
+                                <p className="text-xs sm:text-sm font-semibold text-bamboo-text-main whitespace-pre-wrap">{comment.content}</p>
+                              </div>
+
+                              <div className="shrink-0 flex items-center">
+                                <button
+                                  onClick={() => handleToggleCommentBlind(comment.id, comment.is_blinded)}
+                                  className={`px-3 py-1.5 rounded-bamboo-input text-[11px] font-bold flex items-center gap-1 transition-colors cursor-pointer ${
+                                    comment.is_blinded 
+                                      ? 'bg-blue-50 text-brand-blue hover:bg-blue-100'
+                                      : 'bg-status-rejected text-status-rejected-text hover:bg-status-rejected/80'
+                                  }`}
+                                >
+                                  {comment.is_blinded ? (
+                                    <>
+                                      <Eye className="w-3 h-3" />
+                                      블라인드 해제
+                                    </>
+                                  ) : (
+                                    <>
+                                      <EyeOff className="w-3 h-3" />
+                                      강제 블라인드
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ) : (
-                  <div className="divide-y divide-bamboo-border/40">
-                    {filteredPosts.map((post) => (
-                      <Link
-                        key={post.id}
-                        to={`/board/${post.id}`}
-                        className="flex items-center justify-between py-3.5 group hover:bg-gray-50/50 px-2 rounded transition-colors"
-                      >
-                        <div className="flex items-center gap-3 min-w-0 pr-4">
-                          <div className="shrink-0">{getStatusBadge(post.status)}</div>
-                          <span className="text-xs sm:text-sm font-bold text-bamboo-text-main line-clamp-1 group-hover:text-brand-blue transition-colors">
-                            {post.title}
-                          </span>
-                        </div>
+                  /* 기존 필터된 포스트 목록 */
+                  filteredPosts.length === 0 ? (
+                    <div className="text-center py-12 text-xs text-bamboo-text-muted/70 italic">
+                      선택하신 상태에 해당하는 건의사항이 없습니다.
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-bamboo-border/40">
+                      {filteredPosts.map((post) => (
+                        <Link
+                          key={post.id}
+                          to={`/board/${post.id}`}
+                          className="flex items-center justify-between py-3.5 group hover:bg-gray-50/50 px-2 rounded transition-colors"
+                        >
+                          <div className="flex items-center gap-3 min-w-0 pr-4">
+                            <div className="shrink-0">{getStatusBadge(post.status)}</div>
+                            <span className="text-xs sm:text-sm font-bold text-bamboo-text-main line-clamp-1 group-hover:text-brand-blue transition-colors">
+                              {post.title}
+                            </span>
+                          </div>
 
-                        <div className="flex items-center gap-4 shrink-0">
-                          <span className="hidden sm:inline text-[11px] text-bamboo-text-muted/70">
-                            {new Date(post.created_at).toLocaleDateString('ko-KR')}
-                          </span>
-                          <span className="flex items-center gap-0.5 text-xs text-brand-blue font-semibold">
-                            <Star className="w-3.5 h-3.5 text-brand-blue fill-brand-blue" />
-                            {post.averageScore || 0}
-                          </span>
-                          <ChevronRight className="w-4 h-4 text-bamboo-text-muted/40 group-hover:text-bamboo-text-main transition-colors" />
-                        </div>
-                      </Link>
-                    ))}
-                  </div>
+                          <div className="flex items-center gap-4 shrink-0">
+                            <span className="hidden sm:inline text-[11px] text-bamboo-text-muted/70">
+                              {new Date(post.created_at).toLocaleDateString('ko-KR')}
+                            </span>
+                            <span className="flex items-center gap-0.5 text-xs text-brand-blue font-semibold">
+                              <Star className="w-3.5 h-3.5 text-brand-blue fill-brand-blue" />
+                              {post.averageScore || 0}
+                            </span>
+                            <ChevronRight className="w-4 h-4 text-bamboo-text-muted/40 group-hover:text-bamboo-text-main transition-colors" />
+                          </div>
+                        </Link>
+                      ))}
+                    </div>
+                  )
                 )}
               </div>
             </div>
