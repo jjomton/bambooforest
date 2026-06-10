@@ -29,6 +29,16 @@
   /* 코너 둥글기 (DESIGN.md 규칙: Cards/Large buttons -> 1.0rem, Inputs/Chips -> 0.5rem) */
   --radius-bamboo-card: 1.0rem; /* 16px */
   --radius-bamboo-input: 0.5rem; /* 8px */
+
+  /* 포트폴리오 전용 프리미엄 다크테마 컬러 */
+  --color-port-bg: #090d16;
+  --color-port-card: #111827;
+  --color-port-card-hover: #1f2937;
+  --color-port-accent: #059669;
+  --color-port-accent-light: #34d399;
+  --color-port-text-main: #f3f4f6;
+  --color-port-text-muted: #9ca3af;
+  --color-port-border: #1f2937;
 }
 
 /* Base style overrides */
@@ -41,6 +51,13 @@ html, body, #root {
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* 포트폴리오 루트 범위 내에서 강제 다크모드 적용 */
+.portfolio-root {
+  background-color: var(--color-port-bg) !important;
+  color: var(--color-port-text-main) !important;
+  font-family: var(--font-inter);
 }
 
 h1, h2, h3, h4, h5, h6 {
@@ -68,3 +85,89 @@ h1, h2, h3, h4, h5, h6 {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-bamboo-text-muted);
 }
+
+/* --- 포트폴리오용 특수 비주얼 효과 --- */
+
+/* 텍스트 그라데이션 효과 */
+.text-gradient-emerald {
+  background: linear-gradient(135deg, #34d399 0%, #059669 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.text-gradient-cyan {
+  background: linear-gradient(135deg, #38bdf8 0%, #2563eb 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* 포트폴리오 카드 네온 글로우 효과 */
+.portfolio-card {
+  background: var(--color-port-card);
+  border: 1px solid var(--color-port-border);
+  border-radius: 1rem;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.portfolio-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-radius: 1rem;
+  padding: 1px;
+  background: linear-gradient(135deg, transparent 60%, rgba(52, 211, 153, 0.1) 100%);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.portfolio-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 30px -10px rgba(5, 150, 105, 0.15);
+  border-color: rgba(52, 211, 153, 0.3);
+  background: var(--color-port-card-hover);
+}
+
+.portfolio-card:hover::before {
+  background: linear-gradient(135deg, transparent 40%, rgba(52, 211, 153, 0.3) 100%);
+}
+
+/* 그라데이션 디바이더 */
+.divider-gradient {
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, var(--color-port-border) 15%, var(--color-port-border) 85%, transparent 100%);
+}
+
+/* 테두리 움직이는 그라데이션 애니메이션 효과 */
+@keyframes border-flow {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.animate-border-flow {
+  background-size: 200% 200%;
+  animation: border-flow 6s linear infinite;
+}
+
+/* 부드러운 호버 애니메이션 */
+.transition-glow {
+  transition: all 0.2s ease-in-out;
+}
+.transition-glow:hover {
+  box-shadow: 0 0 15px rgba(52, 211, 153, 0.4);
+}
+
